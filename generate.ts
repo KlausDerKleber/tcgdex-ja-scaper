@@ -94,6 +94,23 @@ function langBlock(value: string, indent = '\t'): string {
 	return `{\n${indent}\tja: "${esc(value)}",\n${indent}}`
 }
 
+/** cardmarket/tcgplayer ids now live on the variant objects (see data/Scarlet & Violet). */
+function pushVariants(L: string[], c: RawCard, variant: string): void {
+	const cm = config.cardmarketIds[String(c.num)]
+	if (cm == null) {
+		L.push(`\tvariants: [{ type: "${variant}" }],`)
+		return
+	}
+	L.push('\tvariants: [')
+	L.push('\t\t{')
+	L.push(`\t\t\ttype: "${variant}",`)
+	L.push('\t\t\tthirdParty: {')
+	L.push(`\t\t\t\tcardmarket: ${cm},`)
+	L.push('\t\t\t},')
+	L.push('\t\t},')
+	L.push('\t],')
+}
+
 function genCard(c: RawCard): string {
 	const L: string[] = []
 	L.push('import { Card } from "../../../interfaces";')
@@ -153,7 +170,7 @@ function genCard(c: RawCard): string {
 		L.push(c.weakness ? `\tweaknesses: [{ type: "${c.weakness}", value: "x2" }],` : '\tweaknesses: [],')
 		L.push(c.resistance ? `\tresistances: [{ type: "${c.resistance.type}", value: "${c.resistance.value}" }],` : '\tresistances: [],')
 		L.push('')
-		L.push(`\tvariants: [{ type: "${variant}" }],`)
+		pushVariants(L, c, variant)
 		L.push('')
 		if (c.evolveFrom) {
 			L.push(`\tevolveFrom: ${langBlock(c.evolveFrom)},`)
@@ -174,20 +191,13 @@ function genCard(c: RawCard): string {
 		L.push(`\t\tja: "${esc(c.effect ?? '')}",`)
 		L.push('\t},')
 		L.push('')
-		L.push(`\tvariants: [{ type: "${variant}" }],`)
+		pushVariants(L, c, variant)
 		L.push('')
 		if (c.category === 'Trainer') L.push(`\ttrainerType: "${c.trainerType}",`)
 		L.push(`\tregulationMark: "${c.regulationMark}",`)
 		L.push(`\trarity: "${c.rarity}",`)
 	}
 
-	const cm = config.cardmarketIds[String(c.num)]
-	if (cm != null) {
-		L.push('')
-		L.push('\tthirdParty: {')
-		L.push(`\t\tcardmarket: ${cm},`)
-		L.push('\t},')
-	}
 	L.push('};')
 	L.push('')
 	L.push('export default card;')
