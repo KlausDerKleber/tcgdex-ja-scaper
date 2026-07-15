@@ -364,6 +364,7 @@ const rarityless = [...set.list.values()].every((r) => r === '')
 const config: Record<string, unknown> = {
 	setId: set.id,
 	nameJa,
+	nameEn: set.name,
 	releaseDate,
 	serie,
 	...(regulationMarks ? {} : { regulationMarks: false }),

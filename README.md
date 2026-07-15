@@ -13,13 +13,14 @@ bun run import.ts "https://pokepricelab.com/catalog?q=&set=abyss-eye&language=al
 bun run import.ts "abyss eye"               # a set name works too
 ```
 
-which chains the four steps (each also runs standalone):
+which chains the five steps (each also runs standalone):
 
 ```
 bun run config.ts <pokepricelab-url|name>   # writes configs/<SET>.config.json
 bun run scrape.ts M5                        # writes out/M5/cards.json (+ cache)
 bun run generate.ts M5 --repo ../cards-database
 bun run images.ts M5                        # images/M5/001.png … + symbol.png
+bun run pr.ts M5 --repo ../cards-database   # type-checks + writes out/M5/pr.md
 cd ../cards-database && git diff            # → empty = every byte reproducible
 ```
 

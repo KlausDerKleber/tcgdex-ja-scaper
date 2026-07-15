@@ -54,6 +54,8 @@ export interface SecretEntry {
 export interface SetConfig {
 	setId: string
 	nameJa: string
+	/** English set name as limitless lists it (used for the PR text) */
+	nameEn?: string
 	releaseDate: string
 	/** data-asia serie directory the set belongs to (default: "M") */
 	serie?: string
