@@ -1,14 +1,16 @@
-// One-shot import: pokepricelab catalog URL in, tcgdex data-asia card files out.
+// One-shot import: pokepricelab catalog URL (or set name) in, tcgdex data-asia card
+// files + card images out.
 //
 //   bun run import.ts "https://pokepricelab.com/catalog?q=&set=<slug>&language=all&condition=all&grade=all" [--repo ../cards-database] [--force]
+//   bun run import.ts "abyss eye"
 //
-// Runs config.ts → scrape.ts → generate.ts. An existing config for the set is kept
-// (so hand-curated manualDex/secrets survive re-runs); --force regenerates it.
+// Runs config.ts → scrape.ts → generate.ts → images.ts. An existing config for the
+// set is kept (so hand-curated manualDex/secrets survive re-runs); --force regenerates it.
 
 const url = process.argv[2]
 const rest = process.argv.slice(3)
-if (!url || !url.includes('pokepricelab.com')) {
-	console.error('usage: bun run import.ts <pokepricelab-catalog-url> [--repo <cards-database>] [--force]')
+if (!url) {
+	console.error('usage: bun run import.ts <pokepricelab-catalog-url | set name> [--repo <cards-database>] [--force]')
 	process.exit(1)
 }
 const repoIdx = rest.indexOf('--repo')
@@ -37,4 +39,6 @@ console.log(`\n=== scrape.ts ${setId}`)
 run(['scrape.ts', setId])
 console.log(`\n=== generate.ts ${setId} --repo ${repo}`)
 run(['generate.ts', setId, '--repo', repo])
+console.log(`\n=== images.ts ${setId}`)
+run(['images.ts', setId])
 console.log(`\ndone — review with: git -C ${repo} status`)

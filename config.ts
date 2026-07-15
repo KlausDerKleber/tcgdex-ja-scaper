@@ -18,18 +18,47 @@ import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { clean, fetchCached, stripTags } from './lib'
 
-const url = process.argv[2]
+const input = process.argv[2]
 const args = process.argv.slice(3)
 const repoIdx = args.indexOf('--repo')
 const repo = repoIdx !== -1 ? args[repoIdx + 1] : '../cards-database'
 const force = args.includes('--force')
-if (!url) {
-	console.error('usage: bun run config.ts <pokepricelab-catalog-url> [--repo <cards-database>] [--force]')
+if (!input) {
+	console.error('usage: bun run config.ts <pokepricelab-catalog-url | set name> [--repo <cards-database>] [--force]')
 	process.exit(1)
 }
-const slug = new URL(url).searchParams.get('set')
-if (!slug) throw new Error('the URL has no set= parameter')
 
+// the set is given as a pokepricelab catalog URL or as a set name, which is resolved
+// against the set list every pokepricelab catalog page renders server-side
+async function resolveSlug(): Promise<string> {
+	if (input.startsWith('http')) {
+		const s = new URL(input).searchParams.get('set')
+		if (!s) throw new Error('the URL has no set= parameter')
+		return s
+	}
+	const root = await fetchCached('https://pokepricelab.com/catalog', `${import.meta.dir}/out/.bootstrap/catalog-root.html`)
+	const sets = [...root.matchAll(/\{\\"slug\\":\\"([a-z0-9-]+)\\",\\"name\\":\\"([^\\"]+)\\"\}/g)].map((m) => ({ slug: m[1], name: m[2] }))
+	if (!sets.length) throw new Error('could not parse the pokepricelab set list')
+	const norm = (s: string) => s.toLowerCase().normalize('NFKC').replace(/[^a-z0-9]+/g, ' ').trim()
+	const q = norm(input)
+	const exact = sets.filter((s) => norm(s.name) === q || s.slug === input)
+	if (exact.length === 1) return exact[0].slug
+	const contains = sets.filter((s) => norm(s.name).includes(q))
+	if (contains.length === 1) return contains[0].slug
+	const pool = (contains.length ? contains : sets)
+		.map((s) => ({ ...s, score: jaccard(tokens(s.name), tokens(input)) }))
+		.sort((a, b) => b.score - a.score)
+	if (pool.length && pool[0].score >= 0.5 && (pool.length === 1 || pool[0].score > pool[1].score)) return pool[0].slug
+	throw new Error(`set name "${input}" is ambiguous — closest: ${pool.slice(0, 5).map((s) => `"${s.name}" (${s.slug})`).join('; ')} — pass the pokepricelab catalog URL instead`)
+}
+
+const tokens = (s: string) => new Set(s.toLowerCase().normalize('NFKC').split(/[^a-z0-9]+/).filter(Boolean))
+function jaccard(a: Set<string>, b: Set<string>): number {
+	const inter = [...a].filter((t) => b.has(t)).length
+	return inter / (a.size + b.size - inter)
+}
+
+const slug = await resolveSlug()
 const BOOT = `${import.meta.dir}/out/.bootstrap/${slug}`
 mkdirSync(BOOT, { recursive: true })
 
@@ -55,12 +84,6 @@ const pplName = catalogHtml.match(new RegExp(`\\\\"name\\\\":\\\\"([^\\\\"]+)\\\
 console.log(`pokepricelab: set "${pplName ? pplName[1] : slug}", ${samples.length} sample cards`)
 
 // ---------- limitless: which set is this? ----------
-
-const tokens = (s: string) => new Set(s.toLowerCase().normalize('NFKC').split(/[^a-z0-9]+/).filter(Boolean))
-function jaccard(a: Set<string>, b: Set<string>): number {
-	const inter = [...a].filter((t) => b.has(t)).length
-	return inter / (a.size + b.size - inter)
-}
 
 interface LlSet { id: string, name: string, date: string }
 
