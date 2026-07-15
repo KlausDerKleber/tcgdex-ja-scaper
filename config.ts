@@ -196,9 +196,14 @@ if (officialCardCount == null || detailsPage == null) {
 }
 
 // pg id, recent sets: the card-search page inlines the product list ({ name: "pg", value, label })
+// — labels look like 拡張パック「アビスアイ」 or 強化拡張パック「ポケモンカード151（イチゴーイチ）」
+// (the trailing parenthetical is a reading hint, not part of the set name)
 const searchPage = await fetchCached('https://www.pokemon-card.com/card-search/', `${BOOT}/official-card-search.html`)
 const pgEntries = [...searchPage.matchAll(/\{ name: "pg", value: "(\d+)"[^}]*label: "([^"]*)"/g)]
-	.filter((m) => m[2].normalize('NFKC').includes(`「${nameJa}」`.normalize('NFKC')))
+	.filter((m) => {
+		const bracket = m[2].normalize('NFKC').match(/「([^」]+)」/)
+		return bracket != null && bracket[1].replace(/\([^)]*\)$/, '') === nameJa.normalize('NFKC')
+	})
 if (pgEntries.length === 1) {
 	pg = parseInt(pgEntries[0][1], 10)
 } else if (pgEntries.length > 1) {
@@ -213,13 +218,14 @@ if (pgEntries.length === 1) {
 	pg = parseInt(pgm[1], 10)
 }
 
-// verify: the official search by pg must list exactly officialCardCount cards
+// verify: the official search by pg lists the main set (secret rares appear there
+// only once the official database has them — then it matches the limitless total)
 const api = JSON.parse(await fetchCached(
 	`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=&pg=${pg}&regulation_sidebar_form=all&sm_and_keyword=true&page=1`,
 	`${CACHE}/official-api-1.json`
 )) as { hitCnt: number, cardList: { cardID: string }[] }
-if (api.hitCnt !== officialCardCount) {
-	throw new Error(`pg=${pg} lists ${api.hitCnt} cards, expected ${officialCardCount}`)
+if (api.hitCnt !== officialCardCount && api.hitCnt !== llCount) {
+	throw new Error(`pg=${pg} lists ${api.hitCnt} cards, expected ${officialCardCount} (official) or ${llCount} (with secrets)`)
 }
 console.log(`official: pg=${pg}, ${officialCardCount} cards, regulation marks: ${regulationMarks}`)
 
