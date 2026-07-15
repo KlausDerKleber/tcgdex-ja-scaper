@@ -5,17 +5,24 @@ Deterministic scraper that builds [tcgdex/cards-database](https://github.com/tcg
 
 Every value in the generated files is copied verbatim from a source page (all HTTP
 responses are cached under `out/<SET>/cache/` for auditing) — nothing is written
-by hand or guessed. Anyone can re-run the tool and `git diff` the result against
-a pull request to verify the data:
+by hand or guessed. A whole set is imported from nothing but its pokepricelab
+catalog URL:
 
 ```
-bun run scrape.ts M5
+bun run import.ts "https://pokepricelab.com/catalog?q=&set=abyss-eye&language=all&condition=all&grade=all" --repo ../cards-database
+```
+
+which chains the three steps (each also runs standalone):
+
+```
+bun run config.ts <pokepricelab-url>        # writes configs/<SET>.config.json
+bun run scrape.ts M5                        # writes out/M5/cards.json (+ cache)
 bun run generate.ts M5 --repo ../cards-database
-cd ../cards-database && git diff        # → empty = every byte reproducible
+cd ../cards-database && git diff            # → empty = every byte reproducible
 ```
 
-The M4 (Ninja Spinner) and M5 (Abyss Eye) pull requests were produced exactly
-this way and are byte-identical to the output of this tool.
+The CP1 (Double Crisis), M4 (Ninja Spinner) and M5 (Abyss Eye) pull requests were
+produced exactly this way and are byte-identical to the output of this tool.
 
 ## Sources
 
@@ -24,7 +31,8 @@ this way and are byte-identical to the output of this tool.
 | Japanese names, attack/ability/trainer text, flavor text, national dex numbers, illustrators, official card count | `www.pokemon-card.com` card database (official) |
 | Stage, evolves-from, weakness/resistance/retreat, rarity, regulation mark | `limitlesstcg.com` |
 | Illustrators of secret rares (only when limitless/official do not list them yet) | `serebii.net` |
-| `thirdParty.cardmarket` product ids | cardmarket.com set listing (static, in the set config) |
+| `thirdParty.cardmarket` product ids | Cardmarket's public product catalog (`downloads.s3.cardmarket.com`); within an expansion the products sorted by id follow the collection numbers, verified against the sample rows pokepricelab renders |
+| Set identification (which limitless/official set a pokepricelab URL means) | `pokepricelab.com` catalog page (set name + ≤10 sample cards with cardmarket ids) |
 
 Rarity names are mapped to the ones used by `data-asia/M` since M1; the mapping was
 derived from M3 (present in both databases) and cross-checked against Cardmarket.
@@ -35,13 +43,17 @@ Japanese text of their most recent print from `www.pokemon-card.com`.
 
 ## Adding a new set
 
-1. Create `configs/<SET>.config.json` (see `M5.config.json`): set id, Japanese name,
-   release date, the `pg` product id from the official card search, card counts,
-   cardmarket product ids, and — if the machine-readable sources do not list the
-   secret rares yet — the secret→base mapping.
-2. `bun run scrape.ts <SET>` — fails loudly on any inconsistency between the sources
-   (name mismatches, missing rarities, wrong card counts).
-3. `bun run generate.ts <SET> --repo <path-to-cards-database>`
-4. Validate: `tsc --noEmit` over the generated files, then commit.
+1. `bun run import.ts <pokepricelab-catalog-url> --repo <path-to-cards-database>`.
+   `config.ts` derives everything itself: set id + Japanese name + release date +
+   card count from limitless, the official `pg` product id + card count + the era's
+   resistance value from pokemon-card.com, the cardmarket ids from Cardmarket's
+   public catalog, and the `data-asia` serie from the repo. Each step fails loudly
+   when a source disagrees.
+2. Only when needed (the tools tell you): add `manualDex` entries for Pokémon whose
+   official pages print no dex number (EX/Mega cards), and — when limitless does not
+   list the secret rares yet — the `secrets` mapping plus `serebiiSlug`
+   (see `M5.config.json`). An existing config is kept on re-runs, so curated
+   entries survive; `scrape.ts`/`generate.ts` fail loudly on any inconsistency.
+3. Validate: `tsc --noEmit` over the generated files, then commit.
 
 Requires [Bun](https://bun.sh); no dependencies.
