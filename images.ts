@@ -10,7 +10,7 @@
 // Cards limitless does not list yet (fresh secret rares) are reported, not fatal.
 
 import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
-import { UA, fetchCached, loadConfig } from './lib'
+import { ENERGY_CODES, UA, fetchCached, loadConfig } from './lib'
 
 const setId = process.argv[2]
 if (!setId) {
@@ -38,11 +38,19 @@ const listHtml = await fetchCached(
 	`${CACHE}/limitless-list.html`
 )
 
-// row thumbnails carry the full image URL with an _XS size suffix
+// row thumbnails carry the full image URL with an _XS size suffix; letter rows are the
+// deck's basic energies and are saved under their tcgdex code (G → GRA.png)
 const images = new Map<number, string>()
+const energyImages = new Map<string, string>()
 for (const row of listHtml.matchAll(new RegExp(`<tr[^>]*data-hover="([^"]*/tpc/${setId}/[^"]*)"[^>]*>([\\s\\S]*?)</tr>`, 'g'))) {
+	const url = row[1].replace(/_XS\.png$/, '.png')
 	const link = row[2].match(new RegExp(`<a href="/cards/jp/${setId}/(\\d+)">`))
-	if (link) images.set(parseInt(link[1], 10), row[1].replace(/_XS\.png$/, '.png'))
+	if (link) {
+		images.set(parseInt(link[1], 10), url)
+		continue
+	}
+	const letter = row[2].match(new RegExp(`<a href="/cards/jp/${setId}/([A-Z])">`))
+	if (letter && ENERGY_CODES[letter[1]]) energyImages.set(ENERGY_CODES[letter[1]].code, url)
 }
 if (!images.size) throw new Error(`no card rows on the limitless list page for ${setId}`)
 
@@ -50,10 +58,13 @@ let fresh = 0
 for (const [num, url] of [...images.entries()].sort((a, b) => a[0] - b[0])) {
 	if (await download(url, `${DIR}/${String(num).padStart(3, '0')}.png`)) fresh += 1
 }
+for (const [code, url] of [...energyImages.entries()].sort()) {
+	if (await download(url, `${DIR}/${code}.png`)) fresh += 1
+}
 
 const symbol = listHtml.match(/<img class="set"[^>]*src="([^"]+)"/)
 if (!symbol) throw new Error('no set symbol on the limitless list page')
 if (await download(symbol[1], `${DIR}/symbol.png`)) fresh += 1
 
 const missing = Array.from({ length: config.totalCards }, (_, i) => i + 1).filter((n) => !images.has(n))
-console.log(`images/${setId}: ${images.size} cards + symbol (${fresh} new)${missing.length ? ` — limitless has no scans yet for: ${missing.join(', ')}` : ''}`)
+console.log(`images/${setId}: ${images.size} cards${energyImages.size ? ` + ${energyImages.size} energies` : ''} + symbol (${fresh} new)${missing.length ? ` — limitless has no scans yet for: ${missing.join(', ')}` : ''}`)

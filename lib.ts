@@ -6,6 +6,13 @@ import { dirname } from 'node:path'
 
 export const UA = 'Mozilla/5.0 (compatible; ja-set-scraper/1.0)'
 
+/** limitless letter code → energy type + tcgdex file code (cf. data-asia/S/SI: GRA.ts …) */
+export const ENERGY_CODES: Record<string, { type: string, code: string }> = {
+	G: { type: 'Grass', code: 'GRA' }, R: { type: 'Fire', code: 'FIR' }, W: { type: 'Water', code: 'WAT' },
+	L: { type: 'Lightning', code: 'LIG' }, P: { type: 'Psychic', code: 'PSY' }, F: { type: 'Fighting', code: 'FIG' },
+	D: { type: 'Darkness', code: 'DAR' }, M: { type: 'Metal', code: 'MET' }, Y: { type: 'Fairy', code: 'FAI' },
+}
+
 export interface Ability {
 	name: string
 	effect: string
@@ -74,6 +81,8 @@ export interface SetConfig {
 	manualDex: Record<string, number>
 	/** collection number → cardmarket product id (from cardmarket.com set listing) */
 	cardmarketIds: Record<string, number>
+	/** unnumbered basic energies of deck products: limitless letter → cardmarket product id */
+	energies?: Record<string, number>
 	/** secret rares not listed by the machine-readable sources; number → origin */
 	secrets?: Record<string, SecretEntry>
 }

@@ -11,7 +11,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadConfig, type RawCard } from './lib'
+import { ENERGY_CODES, loadConfig, type RawCard } from './lib'
 
 const args = process.argv.slice(2)
 const setId = args[0]
@@ -252,6 +252,43 @@ if (failures.length) {
 	process.exit(1)
 }
 
+// unnumbered basic energies of deck products — letter-coded files (cf. data-asia/S/SI)
+const energyCount = Object.keys(config.energies ?? {}).length
+if (config.energies) {
+	const energies: Record<string, { name: string, regulationMark: string | null }> =
+		JSON.parse(readFileSync(`${OUT}/energies.json`, 'utf-8'))
+	for (const [letter, cm] of Object.entries(config.energies)) {
+		const e = energies[letter]
+		if (!e) throw new Error(`energy ${letter} missing from energies.json — re-run scrape.ts`)
+		const L: string[] = []
+		L.push('import { Card } from "../../../interfaces";')
+		L.push(`import Set from "../${config.setId}";`)
+		L.push('')
+		L.push('const card: Card = {')
+		L.push('\tset: Set,')
+		L.push(`\tname: ${langBlock(e.name)},`)
+		L.push('')
+		L.push('\tcategory: "Energy",')
+		L.push('\tenergyType: "Normal",')
+		L.push('')
+		L.push('\tvariants: [')
+		L.push('\t\t{')
+		L.push('\t\t\ttype: "normal",')
+		L.push('\t\t\tthirdParty: {')
+		L.push(`\t\t\t\tcardmarket: ${cm},`)
+		L.push('\t\t\t},')
+		L.push('\t\t},')
+		L.push('\t],')
+		L.push('')
+		if (e.regulationMark) L.push(`\tregulationMark: "${e.regulationMark}",`)
+		L.push('\trarity: "None",')
+		L.push('};')
+		L.push('')
+		L.push('export default card;')
+		writeFileSync(join(dir, `${ENERGY_CODES[letter].code}.ts`), L.join('\n') + '\n')
+	}
+}
+
 // the set file is only generated when the repo does not have one yet — existing
 // set files (e.g. data-asia/XY/CP1.ts) may carry extra languages such as Korean
 const setFile = join(outBase, `${config.setId}.ts`)
@@ -277,7 +314,7 @@ const set: Set = {
 export default set;
 `)
 
-console.log(`${nums.length} card files + ${config.setId}.ts written to ${outBase}`)
+console.log(`${nums.length} card files${energyCount ? ` + ${energyCount} energies` : ''} + ${config.setId}.ts written to ${outBase}`)
 if (!existsSync(join(repo, 'data-asia', 'M', 'M3'))) {
 	console.log('note: --repo does not look like tcgdex/cards-database')
 }

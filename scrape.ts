@@ -275,6 +275,24 @@ async function resolveDexViaOtherPrints(all: Record<string, RawCard>): Promise<v
 	}
 }
 
+// ---------- unnumbered basic energies of deck products (limitless letter cards) ----------
+
+async function scrapeEnergies(cfg: SetConfig): Promise<Record<string, { name: string, regulationMark: string | null }>> {
+	const out: Record<string, { name: string, regulationMark: string | null }> = {}
+	for (const letter of Object.keys(cfg.energies ?? {})) {
+		const html = await fetchCached(
+			`https://limitlesstcg.com/cards/jp/${cfg.setId}/${letter}`,
+			`${CACHE}/limitless-${letter}.html`
+		)
+		const title = html.match(/<span class="card-text-name"><a[^>]*>([^<]+)<\/a><\/span>/)
+		if (!title) throw new Error(`energy ${letter}: no name on limitless page`)
+		if (!/card-text-type">\s*Energy\s*-\s*Basic Energy/.test(html)) throw new Error(`energy ${letter}: not a basic energy`)
+		const reg = html.match(/([A-Z])\s*Regulation Mark/)
+		out[letter] = { name: clean(title[1]), regulationMark: reg ? reg[1] : null }
+	}
+	return out
+}
+
 // ---------- serebii (secret-rare illustrators) ----------
 
 async function serebiiIllustrators(cfg: SetConfig): Promise<Record<string, string>> {
@@ -374,6 +392,7 @@ for (const c of Object.values(cards)) {
 }
 
 writeFileSync(`${OUT}/cards.json`, JSON.stringify(cards, null, 1))
+writeFileSync(`${OUT}/energies.json`, JSON.stringify(await scrapeEnergies(config), null, 1))
 writeFileSync(`${OUT}/serebii-illustrators.json`, JSON.stringify(await serebiiIllustrators(config), null, 1))
 writeFileSync(`${OUT}/staple-texts.json`, JSON.stringify(await stapleTexts(config), null, 1))
 

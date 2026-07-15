@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { clean, fetchCached, stripTags } from './lib'
+import { ENERGY_CODES, clean, fetchCached, stripTags } from './lib'
 
 const input = process.argv[2]
 const args = process.argv.slice(3)
@@ -310,11 +310,19 @@ if (numbers[0] !== 1 || numbers[numbers.length - 1] !== llCount) {
 // numbers only the real cards (they become letter-coded cards like MC G) — exclude them
 // when that makes the counts meet; the sample verification backstops the decision
 let numbered = expansion
+const energies: Record<string, number> = {}
 if (expansion.length !== llCount) {
 	const basics = expansion.filter((p) => /^Basic .+ Energy$/.test(p.name))
 	if (basics.length && expansion.length - basics.length >= llCount) {
 		numbered = expansion.filter((p) => !/^Basic .+ Energy$/.test(p.name))
-		console.log(`note: ${basics.length} basic-energy products excluded from the numbering (${basics.map((p) => p.idProduct).join(', ')})`)
+		// they become the set's unnumbered letter-coded energy cards (limitless: /cards/jp/<SET>/G)
+		for (const p of basics) {
+			const type = p.name.match(/^Basic (.+) Energy$/)![1]
+			const letter = Object.keys(ENERGY_CODES).find((l) => ENERGY_CODES[l].type === type)
+			if (!letter) throw new Error(`unknown basic energy type "${type}" (${p.idProduct})`)
+			energies[letter] = p.idProduct
+		}
+		console.log(`note: ${basics.length} basic energies kept as letter cards (${Object.entries(energies).map(([l, id]) => `${l}=${id}`).join(', ')})`)
 	}
 }
 
@@ -375,6 +383,7 @@ const config: Record<string, unknown> = {
 	totalCards,
 	manualDex: {},
 	cardmarketIds,
+	...(Object.keys(energies).length ? { energies } : {}),
 }
 const path = `${import.meta.dir}/configs/${set.id}.config.json`
 if (existsSync(path) && !force) {

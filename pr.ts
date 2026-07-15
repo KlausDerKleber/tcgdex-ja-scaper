@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { loadConfig, type RawCard } from './lib'
+import { ENERGY_CODES, loadConfig, type RawCard } from './lib'
 
 const setId = process.argv[2]
 const args = process.argv.slice(3)
@@ -23,8 +23,11 @@ const cards: Record<string, RawCard> = JSON.parse(readFileSync(`${import.meta.di
 
 // ---------- type-check the generated files (honest claim in the PR text) ----------
 
+const energyCount = Object.keys(config.energies ?? {}).length
 const files = readdirSync(dir).filter((f) => f.endsWith('.ts')).sort()
-if (files.length !== config.totalCards) throw new Error(`${dir} has ${files.length} files, expected ${config.totalCards}`)
+if (files.length !== config.totalCards + energyCount) {
+	throw new Error(`${dir} has ${files.length} files, expected ${config.totalCards + energyCount}`)
+}
 const tsc = Bun.spawnSync(['bunx', 'tsc', '--noEmit', '--ignoreConfig', '--target', 'esnext', '--module', 'esnext',
 	'--moduleResolution', 'bundler', '--skipLibCheck', ...files.map((f) => join('data-asia', serie, setId, f))], { cwd: repo })
 if (tsc.exitCode !== 0) {
@@ -84,8 +87,8 @@ const body = `## What
 
 Adds the complete Japanese set **${setId} ${config.nameJa}${en}**, released ${config.releaseDate}:
 
-${setFileGenerated ? `- \`data-asia/${serie}/${setId}.ts\` — set definition (${config.officialCardCount} official cards)\n` : ''}- \`data-asia/${serie}/${setId}/${files[0]}\` … \`${files[files.length - 1]}\` — all ${files.length} cards${secretText}
-${setFileGenerated ? '' : `- the set definition \`data-asia/${serie}/${setId}.ts\` already existed and is untouched\n`}
+${setFileGenerated ? `- \`data-asia/${serie}/${setId}.ts\` — set definition (${config.officialCardCount} official cards)\n` : ''}- \`data-asia/${serie}/${setId}/${pad(1)}.ts\` … \`${pad(config.totalCards)}.ts\` — all ${config.totalCards} cards${secretText}
+${energyCount ? `- ${Object.keys(config.energies!).map((l) => `\`${ENERGY_CODES[l].code}.ts\``).join(', ')} — the deck's ${energyCount} basic energies (letter-coded, like data-asia/S/SI)\n` : ''}${setFileGenerated ? '' : `- the set definition \`data-asia/${serie}/${setId}.ts\` already existed and is untouched\n`}
 ## Data sources
 
 - **pokemon-card.com** (official database): Japanese names, flavor texts, National Dex numbers, official card count
