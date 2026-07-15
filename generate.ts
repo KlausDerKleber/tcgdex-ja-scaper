@@ -22,9 +22,10 @@ if (!setId || repoIdx === -1) {
 	process.exit(1)
 }
 const repo = args[repoIdx + 1]
-const outBase = outIdx !== -1 ? args[outIdx + 1] : join(repo, 'data-asia', 'M')
 
 const config = loadConfig(setId)
+const serie = config.serie ?? 'M'
+const outBase = outIdx !== -1 ? args[outIdx + 1] : join(repo, 'data-asia', serie)
 const OUT = `${import.meta.dir}/out/${setId}`
 const cards: Record<string, RawCard> = JSON.parse(readFileSync(`${OUT}/cards.json`, 'utf-8'))
 const serebii: Record<string, string> = JSON.parse(readFileSync(`${OUT}/serebii-illustrators.json`, 'utf-8'))
@@ -111,6 +112,27 @@ function pushVariants(L: string[], c: RawCard, variant: string): void {
 	L.push('\t],')
 }
 
+function pushAttacks(L: string[], c: RawCard): void {
+	if (!c.attacks.length) return
+	L.push('\tattacks: [')
+	for (const at of c.attacks) {
+		L.push('\t\t{')
+		L.push(`\t\t\tname: { ja: "${esc(at.name)}" },`)
+		if (at.damage !== null) {
+			L.push(/^\d+$/.test(at.damage) ? `\t\t\tdamage: ${at.damage},` : `\t\t\tdamage: "${at.damage}",`)
+		}
+		L.push(`\t\t\tcost: [${at.cost.map((t) => `"${t}"`).join(', ')}],`)
+		if (at.effect) {
+			L.push('\t\t\teffect: {')
+			L.push(`\t\t\t\tja: "${esc(at.effect)}",`)
+			L.push('\t\t\t},')
+		}
+		L.push('\t\t},')
+	}
+	L.push('\t],')
+	L.push('')
+}
+
 function genCard(c: RawCard): string {
 	const L: string[] = []
 	L.push('import { Card } from "../../../interfaces";')
@@ -148,25 +170,7 @@ function genCard(c: RawCard): string {
 			L.push('\t],')
 			L.push('')
 		}
-		if (c.attacks.length) {
-			L.push('\tattacks: [')
-			for (const at of c.attacks) {
-				L.push('\t\t{')
-				L.push(`\t\t\tname: { ja: "${esc(at.name)}" },`)
-				if (at.damage !== null) {
-					L.push(/^\d+$/.test(at.damage) ? `\t\t\tdamage: ${at.damage},` : `\t\t\tdamage: "${at.damage}",`)
-				}
-				L.push(`\t\t\tcost: [${at.cost.map((t) => `"${t}"`).join(', ')}],`)
-				if (at.effect) {
-					L.push('\t\t\teffect: {')
-					L.push(`\t\t\t\tja: "${esc(at.effect)}",`)
-					L.push('\t\t\t},')
-				}
-				L.push('\t\t},')
-			}
-			L.push('\t],')
-			L.push('')
-		}
+		pushAttacks(L, c)
 		L.push(c.weakness ? `\tweaknesses: [{ type: "${c.weakness}", value: "x2" }],` : '\tweaknesses: [],')
 		L.push(c.resistance ? `\tresistances: [{ type: "${c.resistance.type}", value: "${c.resistance.value}" }],` : '\tresistances: [],')
 		L.push('')
@@ -177,10 +181,10 @@ function genCard(c: RawCard): string {
 			L.push('')
 		}
 		L.push(`\tretreat: ${c.retreat},`)
-		L.push(`\tregulationMark: "${c.regulationMark}",`)
+		if (c.regulationMark) L.push(`\tregulationMark: "${c.regulationMark}",`)
 		L.push(`\trarity: "${c.rarity}",`)
 		L.push(`\tdexId: [${resolveDex(c)}],`)
-		if (c.name.endsWith('ex')) {
+		if (c.name.endsWith('ex') || c.name.endsWith('EX')) {
 			L.push('')
 			L.push('\tsuffix: "EX",')
 		}
@@ -191,10 +195,11 @@ function genCard(c: RawCard): string {
 		L.push(`\t\tja: "${esc(c.effect ?? '')}",`)
 		L.push('\t},')
 		L.push('')
+		pushAttacks(L, c) // an attack granted by a Pokémon Tool (e.g. CP1 025/026)
 		pushVariants(L, c, variant)
 		L.push('')
 		if (c.category === 'Trainer') L.push(`\ttrainerType: "${c.trainerType}",`)
-		L.push(`\tregulationMark: "${c.regulationMark}",`)
+		if (c.regulationMark) L.push(`\tregulationMark: "${c.regulationMark}",`)
 		L.push(`\trarity: "${c.rarity}",`)
 	}
 
@@ -217,8 +222,11 @@ for (const n of nums) {
 	writeFileSync(join(dir, `${String(n).padStart(3, '0')}.ts`), genCard(cards[String(n)]))
 }
 
-writeFileSync(join(outBase, `${config.setId}.ts`), `import { Set } from "../../interfaces";
-import serie from "../M";
+// the set file is only generated when the repo does not have one yet — existing
+// set files (e.g. data-asia/XY/CP1.ts) may carry extra languages such as Korean
+const setFile = join(outBase, `${config.setId}.ts`)
+if (!existsSync(setFile)) writeFileSync(setFile, `import { Set } from "../../interfaces";
+import serie from "../${serie}";
 
 const set: Set = {
 	id: "${config.setId}",

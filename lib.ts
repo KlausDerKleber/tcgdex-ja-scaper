@@ -55,6 +55,12 @@ export interface SetConfig {
 	setId: string
 	nameJa: string
 	releaseDate: string
+	/** data-asia serie directory the set belongs to (default: "M") */
+	serie?: string
+	/** false for sets printed before regulation marks existed (pre-2018) */
+	regulationMarks?: boolean
+	/** resistance value of the set's era when the source omits it (default: "-30"; XY era: "-20") */
+	resistanceValue?: string
 	officialProductId: number
 	officialCardCount: number
 	totalCards: number

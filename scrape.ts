@@ -109,7 +109,8 @@ async function limitlessCard(n: number, rarityLabel: string | undefined): Promis
 		})
 	}
 
-	for (const at of html.matchAll(/<div class="card-text-attack">([\s\S]*?)<\/div>/g)) {
+	// "card-text-attack trainer" marks an attack granted by a Tool (e.g. CP1 Aqua Diffuser)
+	for (const at of html.matchAll(/<div class="card-text-attack[^"]*">([\s\S]*?)<\/div>/g)) {
 		const info = at[1].match(/card-text-attack-info[^>]*>([\s\S]*?)<\/p>/)
 		const eff = at[1].match(/card-text-attack-effect[^>]*>([\s\S]*?)<\/p>/)
 		if (!info) continue
@@ -128,11 +129,14 @@ async function limitlessCard(n: number, rarityLabel: string | undefined): Promis
 	}
 
 	if (card.category !== 'Pokemon') {
-		// trainer/energy effect: the longest plain card-text-section (skip name and W/R/R rows)
+		// trainer/energy effect: the longest plain card-text-section (skip name and W/R/R rows;
+		// embedded Tool attacks are their own data, and the bare Tool rule reminder is not card text —
+		// Tool cards whose own text limitless omits get it from the official page instead)
 		let best = ''
 		for (const m of html.matchAll(/<div class="card-text-section">([\s\S]*?)<\/div>/g)) {
 			if (m[1].includes('card-text-name') || m[1].includes('card-text-wrr')) continue
-			const txt = clean(stripTags(m[1]))
+			const txt = clean(stripTags(m[1].replace(/<div class="card-text-attack[\s\S]*$/, '')))
+			if (RULE_REMINDERS.has(txt)) continue
 			if (txt.length > best.length) best = txt
 		}
 		;(card as RawCard & { effect?: string }).effect = best
@@ -144,7 +148,7 @@ async function limitlessCard(n: number, rarityLabel: string | undefined): Promis
 		const w = txt.match(/Weakness:\s*([A-Za-z]+)/)
 		if (w && TYPE_WORDS.has(w[1])) card.weakness = w[1]
 		const r = txt.match(/Resistance:\s*([A-Za-z]+)\s*(-\d+)?/)
-		if (r && TYPE_WORDS.has(r[1])) card.resistance = { type: r[1], value: r[2] ?? '-30' }
+		if (r && TYPE_WORDS.has(r[1])) card.resistance = { type: r[1], value: r[2] ?? config.resistanceValue ?? '-30' }
 		const rt = txt.match(/Retreat:\s*(\d+)/)
 		card.retreat = rt ? parseInt(rt[1], 10) : null
 	}
@@ -158,12 +162,24 @@ async function limitlessCard(n: number, rarityLabel: string | undefined): Promis
 
 // ---------- official database ----------
 
+// rule reminders printed on every Pokémon Tool card page — not card-specific text
+// (the Tool rule was reworded over the years; one entry per known era)
+const RULE_REMINDERS = new Set([
+	'ポケモンのどうぐは、自分のポケモンにつけて使う。ポケモン1匹につき1枚だけつけられ、つけたままにする。', // XY era
+	'ポケモンのどうぐは、自分の番に何枚でも、自分のポケモンにつけられる。ポケモン1匹につき1枚だけつけられ、つけたままにする。', // M era
+	'グッズは、自分の番に何枚でも使える。',
+])
+
 interface OfficialCard {
 	num: number
 	total: number
 	name: string | null
 	dexId: number | null
 	flavor: string | null
+	/** Pokémon Tool text (only parsed from Tool card pages) */
+	toolClause?: string
+	/** attack granted by a Pokémon Tool (name + text; the cost only limitless lists) */
+	toolAttack?: { name: string, effect: string }
 }
 
 async function officialCardIds(): Promise<string[]> {
@@ -193,13 +209,24 @@ async function officialCard(cardId: string): Promise<OfficialCard | null> {
 	const name = raw.match(/<h1 class="Heading1[^"]*">([^<]+)<\/h1>/)
 	const dex = raw.match(/<h4>No\.(\d+)/)
 	const flavor = raw.match(/<hr\s*\/>\s*<p>([\s\S]*?)<\/p>/)
-	return {
+	const card: OfficialCard = {
 		num: parseInt(col[1], 10),
 		total: parseInt(col[2], 10),
 		name: name ? clean(name[1]) : null,
 		dexId: dex ? parseInt(dex[1], 10) : null,
 		flavor: flavor ? clean(stripTags(flavor[1])) : null,
 	}
+	const tool = raw.match(/<h2[^>]*>ポケモンのどうぐ<\/h2>([\s\S]*?)(?:<h2|<\/div)/)
+	if (tool) {
+		const ps = [...tool[1].matchAll(/<p>([\s\S]*?)<\/p>/g)]
+			.map((m) => clean(stripTags(m[1])))
+			.filter((p) => p && !RULE_REMINDERS.has(p))
+		if (ps.length !== 1) throw new Error(`card ${card.num}: expected exactly one Tool text paragraph, got ${ps.length}`)
+		card.toolClause = ps[0]
+		const attack = raw.match(/<h2[^>]*>ワザ<\/h2>\s*<h4[^>]*>([\s\S]*?)<\/h4>\s*<p>([\s\S]*?)<\/p>/)
+		if (attack) card.toolAttack = { name: clean(stripTags(attack[1])), effect: clean(stripTags(attack[2])) }
+	}
+	return card
 }
 
 // ---------- serebii (secret-rare illustrators) ----------
@@ -275,14 +302,27 @@ for (const id of ids) {
 	c.dexId = o.dexId
 	c.flavor = o.flavor
 	if (o.total !== config.officialCardCount) problems.push(`${o.num}: official total ${o.total} ≠ config ${config.officialCardCount}`)
+	if (o.toolClause) {
+		const cc = c as RawCard & { effect?: string }
+		if (!cc.effect) cc.effect = o.toolClause
+		if (o.toolAttack) {
+			const at = c.attacks[0]
+			if (!at) problems.push(`${o.num}: official page grants a Tool attack, limitless page does not`)
+			else {
+				if (at.name !== o.toolAttack.name) problems.push(`${o.num}: tool attack name mismatch limitless=${at.name} official=${o.toolAttack.name}`)
+				if (at.effect !== o.toolAttack.effect) problems.push(`${o.num}: tool attack text mismatch limitless=${at.effect} official=${o.toolAttack.effect}`)
+			}
+		}
+	}
 }
 
 for (const c of Object.values(cards)) {
 	if (c.category === 'Pokemon' && (!c.hp || !c.types.length || !c.stageRaw || c.retreat === null)) {
 		problems.push(`${c.num}: incomplete pokemon data`)
 	}
+	if (c.category !== 'Pokemon' && !(c as RawCard & { effect?: string }).effect) problems.push(`${c.num}: missing trainer/energy text`)
 	if (!c.rarity) problems.push(`${c.num}: missing rarity`)
-	if (!c.regulationMark) problems.push(`${c.num}: missing regulation mark`)
+	if (config.regulationMarks !== false && !c.regulationMark) problems.push(`${c.num}: missing regulation mark`)
 }
 
 writeFileSync(`${OUT}/cards.json`, JSON.stringify(cards, null, 1))
