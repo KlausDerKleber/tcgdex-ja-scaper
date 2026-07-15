@@ -79,7 +79,6 @@ if (config.regulationMarks === false) notes.push(`No \`regulationMark\` (the set
 if (config.rarities === false) notes.push(`The product's cards carry no rarity — they use \`rarity: "None"\` and plain variants, like data-asia/VS/VS1`)
 if (toolAttacks.length) notes.push(`${toolAttacks.map((c) => pad(c.num)).join('/')} ${toolAttacks.length === 1 ? 'is a Pokémon Tool' : 'are Pokémon Tools'} that grant an attack — modeled as \`effect\` + \`attacks\`, like their English prints`)
 notes.push(`All ${files.length} files type-check against \`interfaces.d.ts\` (\`tsc --noEmit\`)`)
-notes.push(`Card images (by collection number): TODO attach link — local mirror in \`images/${setId}/\``)
 
 const body = `## What
 
