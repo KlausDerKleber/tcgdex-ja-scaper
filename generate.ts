@@ -200,7 +200,7 @@ function genCard(c: RawCard): string {
 		}
 		L.push(`\tretreat: ${c.retreat},`)
 		if (c.regulationMark) L.push(`\tregulationMark: "${c.regulationMark}",`)
-		if (c.rarity != null) L.push(`\trarity: "${c.rarity}",`)
+		L.push(`\trarity: "${c.rarity ?? 'None'}",`) // rarity-less products use "None" (cf. data-asia/VS/VS1)
 		L.push(`\tdexId: [${resolveDex(c)}],`)
 		if (c.name.endsWith('ex') || c.name.endsWith('EX')) {
 			L.push('')
@@ -218,7 +218,7 @@ function genCard(c: RawCard): string {
 		L.push('')
 		if (c.category === 'Trainer') L.push(`\ttrainerType: "${c.trainerType}",`)
 		if (c.regulationMark) L.push(`\tregulationMark: "${c.regulationMark}",`)
-		if (c.rarity != null) L.push(`\trarity: "${c.rarity}",`)
+		L.push(`\trarity: "${c.rarity ?? 'None'}",`)
 	}
 
 	L.push('};')

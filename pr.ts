@@ -57,9 +57,11 @@ const secretRarities = config.secrets
 	? Object.values(config.secrets).map((s) => s.rarity)
 	: Object.values(cards).filter((c) => c.num > config.officialCardCount).map((c) => c.rarity ?? '?')
 const secretParts = [...count(secretRarities)].map(([r, n]) => `${n} ${SECRET_SHORT[r] ?? r}`)
-const secretText = secretRarities.length
-	? ` (${config.officialCardCount} regular + ${secretRarities.length} secret rares: ${secretParts.join(', ')})`
-	: ` (${catParts.join(', ')})`
+const secretText = !secretRarities.length
+	? ` (${catParts.join(', ')})`
+	: config.rarities === false
+		? ` (${config.officialCardCount} printed + ${secretRarities.length} beyond the printed count)`
+		: ` (${config.officialCardCount} regular + ${secretRarities.length} secret rares: ${secretParts.join(', ')})`
 
 const cm = Object.values(config.cardmarketIds)
 const cmRange = cm.length ? `${Math.min(...cm)}–${Math.max(...cm)}` : 'none yet'
@@ -74,7 +76,7 @@ const en = config.nameEn ? ` (${config.nameEn})` : ''
 const notes: string[] = []
 notes.push(`Follows the file format and conventions of the M-era sets (#1728)`)
 if (config.regulationMarks === false) notes.push(`No \`regulationMark\` (the set predates regulation marks)${config.resistanceValue ? `; resistances are \`${config.resistanceValue}\` per the era` : ''}`)
-if (config.rarities === false) notes.push(`The product's cards carry no rarity — the field is omitted and all variants are plain, like data-asia/S/SI`)
+if (config.rarities === false) notes.push(`The product's cards carry no rarity — they use \`rarity: "None"\` and plain variants, like data-asia/VS/VS1`)
 if (toolAttacks.length) notes.push(`${toolAttacks.map((c) => pad(c.num)).join('/')} ${toolAttacks.length === 1 ? 'is a Pokémon Tool' : 'are Pokémon Tools'} that grant an attack — modeled as \`effect\` + \`attacks\`, like their English prints`)
 notes.push(`All ${files.length} files type-check against \`interfaces.d.ts\` (\`tsc --noEmit\`)`)
 notes.push(`Card images (by collection number): TODO attach link — local mirror in \`images/${setId}/\``)
