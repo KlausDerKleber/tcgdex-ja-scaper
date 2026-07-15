@@ -145,7 +145,8 @@ function genCard(c: RawCard): string {
 	L.push(`\tillustrator: "${esc(c.illustrator || '')}",`)
 	L.push(`\tcategory: "${c.category}",`)
 
-	const variant = c.rarity === 'Common' || c.rarity === 'Uncommon' ? 'normal' : 'holo'
+	// rarity-less deck cards (cf. data-asia/S/SI) are plain prints
+	const variant = c.rarity === 'Common' || c.rarity === 'Uncommon' || c.rarity == null ? 'normal' : 'holo'
 
 	if (c.category === 'Pokemon') {
 		L.push(`\thp: ${c.hp},`)
@@ -182,7 +183,7 @@ function genCard(c: RawCard): string {
 		}
 		L.push(`\tretreat: ${c.retreat},`)
 		if (c.regulationMark) L.push(`\tregulationMark: "${c.regulationMark}",`)
-		L.push(`\trarity: "${c.rarity}",`)
+		if (c.rarity != null) L.push(`\trarity: "${c.rarity}",`)
 		L.push(`\tdexId: [${resolveDex(c)}],`)
 		if (c.name.endsWith('ex') || c.name.endsWith('EX')) {
 			L.push('')
@@ -200,7 +201,7 @@ function genCard(c: RawCard): string {
 		L.push('')
 		if (c.category === 'Trainer') L.push(`\ttrainerType: "${c.trainerType}",`)
 		if (c.regulationMark) L.push(`\tregulationMark: "${c.regulationMark}",`)
-		L.push(`\trarity: "${c.rarity}",`)
+		if (c.rarity != null) L.push(`\trarity: "${c.rarity}",`)
 	}
 
 	L.push('};')

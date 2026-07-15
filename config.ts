@@ -22,66 +22,109 @@ const input = process.argv[2]
 const args = process.argv.slice(3)
 const repoIdx = args.indexOf('--repo')
 const repo = repoIdx !== -1 ? args[repoIdx + 1] : '../cards-database'
+const setIdx = args.indexOf('--set')
+const forcedSetId = setIdx !== -1 ? args[setIdx + 1] : null
 const force = args.includes('--force')
 if (!input) {
-	console.error('usage: bun run config.ts <pokepricelab-catalog-url | set name> [--repo <cards-database>] [--force]')
+	console.error('usage: bun run config.ts <pokepricelab-catalog-url | set name> [--set <limitless-id>] [--repo <cards-database>] [--force]')
 	process.exit(1)
 }
 
 // the set is given as a pokepricelab catalog URL or as a set name, which is resolved
-// against the set list every pokepricelab catalog page renders server-side
-async function resolveSlug(): Promise<string> {
+// against the set list every pokepricelab catalog page renders server-side; candidates
+// are tried in order and international prints (mirror sets like the English "Double
+// Crisis" next to the Japanese CP1) are skipped via the listing languages
+async function resolveSlugCandidates(): Promise<string[]> {
 	if (input.startsWith('http')) {
 		const s = new URL(input).searchParams.get('set')
 		if (!s) throw new Error('the URL has no set= parameter')
-		return s
+		return [s]
 	}
 	const root = await fetchCached('https://pokepricelab.com/catalog', `${import.meta.dir}/out/.bootstrap/catalog-root.html`)
 	const sets = [...root.matchAll(/\{\\"slug\\":\\"([a-z0-9-]+)\\",\\"name\\":\\"([^\\"]+)\\"\}/g)].map((m) => ({ slug: m[1], name: m[2] }))
 	if (!sets.length) throw new Error('could not parse the pokepricelab set list')
 	const norm = (s: string) => s.toLowerCase().normalize('NFKC').replace(/[^a-z0-9]+/g, ' ').trim()
 	const q = norm(input)
-	const exact = sets.filter((s) => norm(s.name) === q || s.slug === input)
-	if (exact.length === 1) return exact[0].slug
-	const contains = sets.filter((s) => norm(s.name).includes(q))
-	if (contains.length === 1) return contains[0].slug
-	const pool = (contains.length ? contains : sets)
-		.map((s) => ({ ...s, score: jaccard(tokens(s.name), tokens(input)) }))
-		.sort((a, b) => b.score - a.score)
-	if (pool.length && pool[0].score >= 0.5 && (pool.length === 1 || pool[0].score > pool[1].score)) return pool[0].slug
-	throw new Error(`set name "${input}" is ambiguous — closest: ${pool.slice(0, 5).map((s) => `"${s.name}" (${s.slug})`).join('; ')} — pass the pokepricelab catalog URL instead`)
+	const ranked = [
+		...sets.filter((s) => norm(s.name) === q || s.slug === input),
+		...sets.filter((s) => norm(s.name).includes(q)),
+		...sets
+			.map((s) => ({ ...s, score: jaccard(tokens(s.name), tokens(input)) }))
+			.filter((s) => s.score >= 0.5)
+			.sort((a, b) => b.score - a.score),
+	]
+	const slugs = [...new Set(ranked.map((s) => s.slug))].slice(0, 5)
+	if (!slugs.length) throw new Error(`no pokepricelab set matches "${input}" — pass the catalog URL instead`)
+	return slugs
 }
 
-const tokens = (s: string) => new Set(s.toLowerCase().normalize('NFKC').split(/[^a-z0-9]+/).filter(Boolean))
+// tokens are singularized (decks → deck) so wording variants still overlap
+const tokens = (s: string) => new Set(s.toLowerCase().normalize('NFKC').split(/[^a-z0-9]+/).filter(Boolean).map((t) => t.replace(/s$/, '')))
 function jaccard(a: Set<string>, b: Set<string>): number {
 	const inter = [...a].filter((t) => b.has(t)).length
 	return inter / (a.size + b.size - inter)
 }
 
-const slug = await resolveSlug()
-const BOOT = `${import.meta.dir}/out/.bootstrap/${slug}`
-mkdirSync(BOOT, { recursive: true })
+// ---------- pokepricelab: pick the (Japanese) set and read the sample rows ----------
 
-// ---------- pokepricelab: sample rows from the catalog page (max 10, server-rendered) ----------
-
-interface PplRow { num: number, cardmarket: number, rarity: string | null }
+interface PplRow { num: number, cardmarket: number, rarity: string | null, languages: string[] }
 
 function parsePplRows(html: string): PplRow[] {
 	const rows: PplRow[] = []
 	for (const m of html.matchAll(/\\"card_number\\":\\"(\d+)\\",\\"cardmarket_id\\":(\d+)/g)) {
-		// the rarity belongs to the same card object → nearest preceding "rarity" key
+		// rarity and listing languages belong to the same card object → nearest preceding keys
 		const before = html.slice(Math.max(0, m.index! - 2000), m.index!)
 		const r = [...before.matchAll(/\\"rarity\\":\\"([^\\"]+)\\"/g)].pop()
-		rows.push({ num: parseInt(m[1], 10), cardmarket: parseInt(m[2], 10), rarity: r ? r[1] : null })
+		const l = [...before.matchAll(/\\"languages\\":\[([^\]]*)\]/g)].pop()
+		rows.push({
+			num: parseInt(m[1], 10),
+			cardmarket: parseInt(m[2], 10),
+			rarity: r ? r[1] : null,
+			languages: l ? [...l[1].matchAll(/\\"([A-Z-]+)\\"/g)].map((x) => x[1]) : [],
+		})
 	}
 	return rows
 }
 
-const catalogHtml = await fetchCached(`https://pokepricelab.com/catalog?set=${slug}`, `${BOOT}/ppl-catalog.html`)
-const samples = parsePplRows(catalogHtml)
-if (!samples.length) throw new Error(`pokepricelab catalog for ${slug} has no cards`)
+let slug = ''
+let BOOT = ''
+let catalogHtml = ''
+let samples: PplRow[] = []
+for (const cand of await resolveSlugCandidates()) {
+	const boot = `${import.meta.dir}/out/.bootstrap/${cand}`
+	mkdirSync(boot, { recursive: true })
+	const html = await fetchCached(`https://pokepricelab.com/catalog?set=${cand}`, `${boot}/ppl-catalog.html`)
+	const rows = parsePplRows(html)
+	if (!rows.length) continue
+	// a Japanese set is listed in JA (and KO), never in EN — mirror prints are skipped
+	if (!rows.some((s) => s.languages.includes('JA')) || rows.some((s) => s.languages.includes('EN'))) {
+		console.log(`skipped pokepricelab set "${cand}" (international print)`)
+		continue
+	}
+	slug = cand; BOOT = boot; catalogHtml = html; samples = rows
+	break
+}
+if (!slug) throw new Error(`no matching Japanese pokepricelab set for "${input}" — pass the catalog URL of the Japanese listing`)
+
 const pplName = catalogHtml.match(new RegExp(`\\\\"name\\\\":\\\\"([^\\\\"]+)\\\\",\\\\"slug\\\\":\\\\"${slug}\\\\"`))
 console.log(`pokepricelab: set "${pplName ? pplName[1] : slug}", ${samples.length} sample cards`)
+
+// ---------- cardmarket expansion (anchored by a sample product id) ----------
+
+// Cardmarket publishes its full Pokémon singles catalog on S3 (idProduct, name,
+// idExpansion — no collection numbers). The expansion's product count is exact, which
+// also pins down the right limitless set below.
+const CM_CACHE = `${import.meta.dir}/out/.cardmarket/products_singles_6.json`
+const catalog = JSON.parse(await fetchCached(
+	'https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_6.json',
+	CM_CACHE
+)) as { products: { idProduct: number, name: string, idExpansion: number }[] }
+const sampleProduct = catalog.products.find((p) => p.idProduct === samples[0].cardmarket)
+if (!sampleProduct) throw new Error(`cardmarket catalog has no product ${samples[0].cardmarket} — delete ${CM_CACHE} to refresh`)
+const expansion = catalog.products
+	.filter((p) => p.idExpansion === sampleProduct.idExpansion)
+	.sort((a, b) => a.idProduct - b.idProduct)
+console.log(`cardmarket: expansion ${sampleProduct.idExpansion}, ${expansion.length} products`)
 
 // ---------- limitless: which set is this? ----------
 
@@ -110,23 +153,27 @@ const setsHtml = await fetchCached('https://limitlesstcg.com/cards/jp', `${BOOT}
 const allSets = parseLimitlessSets(setsHtml)
 if (!allSets.length) throw new Error('could not parse the limitless set index')
 const pplTokens = tokens(pplName ? pplName[1] : slug.replace(/-/g, ' '))
-const candidates = allSets
-	.map((s) => ({ ...s, score: jaccard(tokens(s.name), pplTokens) }))
-	.filter((s) => s.score >= 0.25)
-	.sort((a, b) => b.score - a.score)
-	.slice(0, 5)
-if (!candidates.length) throw new Error(`no limitless set matches "${[...pplTokens].join(' ')}"`)
+const candidates = forcedSetId
+	? allSets.filter((s) => s.id === forcedSetId).map((s) => ({ ...s, score: 1 }))
+	: allSets
+		.map((s) => ({ ...s, score: jaccard(tokens(s.name), pplTokens) }))
+		.filter((s) => s.score >= 0.2)
+		.sort((a, b) => b.score - a.score)
+		.slice(0, 8)
+if (!candidates.length) throw new Error(forcedSetId ? `limitless has no set "${forcedSetId}"` : `no limitless set matches "${[...pplTokens].join(' ')}"`)
 
-// verify candidates against the sample rows: sample numbers the candidate lists must not
-// contradict on the C/U/R/RR rarity labels (shared vocabulary of cardmarket and limitless);
-// numbers beyond the candidate's list are unknowable here (limitless lags behind on secret
-// rares) — the cardmarket-id assignment below re-verifies every sample either way
+// pick the candidate by hard data, the name similarity only breaks ties:
+//  - a candidate listing more cards than the cardmarket expansion has products is impossible
+//  - the C/U/R/RR rarity labels of the sample rows (shared vocabulary of cardmarket and
+//    limitless) must not contradict; numbers beyond the candidate's list are unknowable
+//    (limitless lags behind on secret rares) — the id assignment re-verifies every sample
+//  - a candidate whose card count equals the expansion's product count wins outright
 const BASE_RARITIES = new Set(['Common', 'Uncommon', 'Rare', 'Double Rare'])
 const verified: (typeof candidates[0] & { list: Map<number, string> })[] = []
 for (const c of candidates) {
 	const listHtml = await fetchCached(`https://limitlesstcg.com/cards/jp/${c.id}?display=list`, `${BOOT}/limitless-list-${c.id}.html`)
 	const list = parseLimitlessList(listHtml, c.id)
-	if (!list.size) continue
+	if (!list.size || list.size > expansion.length) continue
 	const contradiction = samples.some((s) => {
 		const label = list.get(s.num)
 		return label !== undefined && s.rarity != null
@@ -134,10 +181,12 @@ for (const c of candidates) {
 	})
 	if (!contradiction) verified.push({ ...c, list })
 }
-if (!verified.length || (verified.length > 1 && verified[0].score === verified[1].score)) {
-	throw new Error(`set is ambiguous or unknown — candidates: ${candidates.map((c) => `${c.id} (${c.name}, ${c.score.toFixed(2)}${verified.some((v) => v.id === c.id) ? ', plausible' : ''})`).join('; ')}`)
+const exact = verified.filter((c) => c.list.size === expansion.length)
+const pool = exact.length ? exact : verified
+if (!pool.length || (pool.length > 1 && pool[0].score === pool[1].score)) {
+	throw new Error(`set is ambiguous or unknown — candidates: ${candidates.map((c) => `${c.id} (${c.name}, ${c.score.toFixed(2)}${verified.some((v) => v.id === c.id) ? ', plausible' : ''})`).join('; ')} — pass --set <limitless-id> to pick one`)
 }
-const set = verified[0] // candidates are sorted by name similarity — unique best wins
+const set = pool[0]
 console.log(`limitless: ${set.id} "${set.name}", released ${set.date}, ${set.list.size} cards listed`)
 
 const CACHE = `${import.meta.dir}/out/${set.id}/cache`
@@ -201,8 +250,10 @@ if (officialCardCount == null || detailsPage == null) {
 const searchPage = await fetchCached('https://www.pokemon-card.com/card-search/', `${BOOT}/official-card-search.html`)
 const pgEntries = [...searchPage.matchAll(/\{ name: "pg", value: "(\d+)"[^}]*label: "([^"]*)"/g)]
 	.filter((m) => {
-		const bracket = m[2].normalize('NFKC').match(/「([^」]+)」/)
-		return bracket != null && bracket[1].replace(/\([^)]*\)$/, '') === nameJa.normalize('NFKC')
+		const label = m[2].normalize('NFKC')
+		const bracket = label.match(/「([^」]+)」/)
+		// deck products carry no 「…」 around the name — then the whole label must match
+		return (bracket ? bracket[1] : label).replace(/\([^)]*\)$/, '').trim() === nameJa.normalize('NFKC')
 	})
 if (pgEntries.length === 1) {
 	pg = parseInt(pgEntries[0][1], 10)
@@ -218,14 +269,15 @@ if (pgEntries.length === 1) {
 	pg = parseInt(pgm[1], 10)
 }
 
-// verify: the official search by pg lists the main set (secret rares appear there
-// only once the official database has them — then it matches the limitless total)
+// sanity: the pg listing covers at least the printed main set; secret rares and (for
+// deck products) energies/variants can push it above the printed count, but a grossly
+// different size means the label matched the wrong product
 const api = JSON.parse(await fetchCached(
 	`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=&pg=${pg}&regulation_sidebar_form=all&sm_and_keyword=true&page=1`,
 	`${CACHE}/official-api-1.json`
 )) as { hitCnt: number, cardList: { cardID: string }[] }
-if (api.hitCnt !== officialCardCount && api.hitCnt !== llCount) {
-	throw new Error(`pg=${pg} lists ${api.hitCnt} cards, expected ${officialCardCount} (official) or ${llCount} (with secrets)`)
+if (api.hitCnt < officialCardCount || api.hitCnt > 2 * Math.max(officialCardCount, llCount)) {
+	throw new Error(`pg=${pg} lists ${api.hitCnt} cards — implausible for ${officialCardCount} official / ${llCount} limitless cards`)
 }
 console.log(`official: pg=${pg}, ${officialCardCount} cards, regulation marks: ${regulationMarks}`)
 
@@ -242,49 +294,49 @@ for (const c of api.cardList) {
 }
 if (resistanceValue) console.log(`era resistance value: ${resistanceValue}`)
 
-// ---------- cardmarket ids (public cardmarket product catalog) ----------
+// ---------- cardmarket ids ----------
 
-// Cardmarket publishes its full Pokémon singles catalog on S3 (idProduct, name,
-// idExpansion — no collection numbers). Within one expansion the products sorted by
-// idProduct follow the collection-number order; this assignment is verified against
-// every pokepricelab sample row and the run aborts on any disagreement.
-// (Verified to reproduce the hand-curated CP1 and M5 configs 118/118 and 34/34.)
+// Within one expansion the products sorted by idProduct follow the collection-number
+// order; this assignment is verified against every pokepricelab sample row and the run
+// aborts on any disagreement. (Reproduces the hand-curated CP1 and M5 configs exactly,
+// and SV2a's full dex-ordered numbering.)
 
 const numbers = [...set.list.keys()].sort((a, b) => a - b)
 if (numbers[0] !== 1 || numbers[numbers.length - 1] !== llCount) {
 	throw new Error(`limitless numbering is not contiguous 1..${llCount} — extend config.ts`)
 }
 
-const CM_CACHE = `${import.meta.dir}/out/.cardmarket/products_singles_6.json`
-const catalog = JSON.parse(await fetchCached(
-	'https://downloads.s3.cardmarket.com/productCatalog/productList/products_singles_6.json',
-	CM_CACHE
-)) as { products: { idProduct: number, name: string, idExpansion: number }[] }
-const sampleProduct = catalog.products.find((p) => p.idProduct === samples[0].cardmarket)
-if (!sampleProduct) throw new Error(`cardmarket catalog has no product ${samples[0].cardmarket} — delete ${CM_CACHE} to refresh`)
-const expansion = catalog.products
-	.filter((p) => p.idExpansion === sampleProduct.idExpansion)
-	.sort((a, b) => a.idProduct - b.idProduct)
+// deck products list the deck's basic energies as cardmarket products while limitless
+// numbers only the real cards (they become letter-coded cards like MC G) — exclude them
+// when that makes the counts meet; the sample verification backstops the decision
+let numbered = expansion
+if (expansion.length !== llCount) {
+	const basics = expansion.filter((p) => /^Basic .+ Energy$/.test(p.name))
+	if (basics.length && expansion.length - basics.length >= llCount) {
+		numbered = expansion.filter((p) => !/^Basic .+ Energy$/.test(p.name))
+		console.log(`note: ${basics.length} basic-energy products excluded from the numbering (${basics.map((p) => p.idProduct).join(', ')})`)
+	}
+}
 
 // cardmarket usually lists secret rares before limitless does — its expansion size is
 // then the real total; any wrong assignment (or a wrong set match) trips on the samples
 const cardmarketIds: Record<string, number> = {}
 let totalCards = llCount
-if (expansion.length >= llCount) {
-	totalCards = expansion.length
-	expansion.forEach((p, i) => { cardmarketIds[String(i + 1)] = p.idProduct })
+if (numbered.length >= llCount) {
+	totalCards = numbered.length
+	numbered.forEach((p, i) => { cardmarketIds[String(i + 1)] = p.idProduct })
 	for (const s of samples) {
 		if (cardmarketIds[String(s.num)] !== s.cardmarket) {
 			throw new Error(`cardmarket id order broken at card ${s.num}: catalog order says ${cardmarketIds[String(s.num)]}, pokepricelab says ${s.cardmarket} — wrong set match or non-sequential expansion`)
 		}
 	}
-	console.log(`cardmarket ids: ${expansion.length} (expansion ${sampleProduct.idExpansion}, verified against ${samples.length} pokepricelab samples)`)
-	if (expansion.length > llCount) {
-		console.log(`note: cards ${llCount + 1}–${expansion.length} are not on limitless yet — add them to "secrets" in the config (see M5.config.json)`)
+	console.log(`cardmarket ids: ${numbered.length} (expansion ${sampleProduct.idExpansion}, verified against ${samples.length} pokepricelab samples)`)
+	if (numbered.length > llCount) {
+		console.log(`note: cards ${llCount + 1}–${numbered.length} are not on limitless yet — add them to "secrets" in the config (see M5.config.json)`)
 	}
 } else {
-	console.log(`WARNING: cardmarket expansion ${sampleProduct.idExpansion} has only ${expansion.length} products for ${llCount} cards — cardmarketIds left empty; fill them by hand or delete ${CM_CACHE} to refresh`)
-	for (const p of expansion) console.log(`  ${p.idProduct} ${p.name}`)
+	console.log(`WARNING: cardmarket expansion ${sampleProduct.idExpansion} has only ${numbered.length} usable products for ${llCount} cards — cardmarketIds left empty; fill them by hand or delete ${CM_CACHE} to refresh`)
+	for (const p of numbered) console.log(`  ${p.idProduct} ${p.name}`)
 }
 
 // ---------- serie (existing set stub in the repo, else longest matching serie dir) ----------
@@ -306,12 +358,16 @@ if (!serie) throw new Error(`cannot derive the data-asia serie for ${set.id} —
 
 // ---------- write ----------
 
+// deck products carry no rarities at all (every list label is empty)
+const rarityless = [...set.list.values()].every((r) => r === '')
+
 const config: Record<string, unknown> = {
 	setId: set.id,
 	nameJa,
 	releaseDate,
 	serie,
 	...(regulationMarks ? {} : { regulationMarks: false }),
+	...(rarityless ? { rarities: false } : {}),
 	...(resistanceValue && resistanceValue !== '-30' ? { resistanceValue } : {}),
 	officialProductId: pg,
 	officialCardCount,

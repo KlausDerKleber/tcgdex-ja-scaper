@@ -321,7 +321,7 @@ for (const c of Object.values(cards)) {
 		problems.push(`${c.num}: incomplete pokemon data`)
 	}
 	if (c.category !== 'Pokemon' && !(c as RawCard & { effect?: string }).effect) problems.push(`${c.num}: missing trainer/energy text`)
-	if (!c.rarity) problems.push(`${c.num}: missing rarity`)
+	if (config.rarities !== false && !c.rarity) problems.push(`${c.num}: missing rarity`)
 	if (config.regulationMarks !== false && !c.regulationMark) problems.push(`${c.num}: missing regulation mark`)
 }
 

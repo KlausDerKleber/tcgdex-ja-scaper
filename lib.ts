@@ -59,6 +59,8 @@ export interface SetConfig {
 	serie?: string
 	/** false for sets printed before regulation marks existed (pre-2018) */
 	regulationMarks?: boolean
+	/** false for products whose cards carry no rarity at all (deck sets, cf. data-asia/S/SI) */
+	rarities?: boolean
 	/** resistance value of the set's era when the source omits it (default: "-30"; XY era: "-20") */
 	resistanceValue?: string
 	officialProductId: number
