@@ -229,6 +229,52 @@ async function officialCard(cardId: string): Promise<OfficialCard | null> {
 	return card
 }
 
+// ---------- dex ids the set's own pages do not print (ex/Mega/owned Pokémon) ----------
+
+// another print of the same species carries the number — search the official database
+// for progressively simplified species names (エリカのラフレシアex → エリカのラフレシア →
+// ラフレシア; メガリザードンYex → メガリザードンY → リザードンY → リザードン; regional
+// forms share their base form's number)
+function speciesCandidates(name: string): string[] {
+	const out: string[] = []
+	const add = (s: string) => {
+		s = s.trim()
+		if (!s || out.includes(s)) return
+		out.push(s)
+		if (s.includes('の')) add(s.slice(s.indexOf('の') + 1))
+		if (s.startsWith('メガ')) add(s.slice(2))
+		const regional = s.match(/^(?:アローラ|ガラル|ヒスイ|パルデア)\s*(.+)$/)
+		if (regional) add(regional[1])
+	}
+	add(name.replace(/(ex|EX)$/, ''))
+	for (const s of [...out]) if (/[XY]$/.test(s)) add(s.slice(0, -1)) // mega form letters
+	return out
+}
+
+async function resolveDexViaOtherPrints(all: Record<string, RawCard>): Promise<void> {
+	for (const c of Object.values(all)) {
+		if (c.category !== 'Pokemon' || c.dexId != null) continue
+		outer: for (const cand of speciesCandidates(c.name)) {
+			const raw = await fetchCached(
+				`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=${encodeURIComponent(cand)}&regulation_sidebar_form=all&sm_and_keyword=true`,
+				`${CACHE}/dex-search-${cand}.json`
+			)
+			const d = JSON.parse(raw) as { cardList: { cardID: string, cardNameViewText: string }[] }
+			for (const hit of d.cardList.filter((h) => h.cardNameViewText === cand).slice(0, 5)) {
+				const page = await fetchCached(
+					`https://www.pokemon-card.com/card-search/details.php/card/${hit.cardID}/regu/all`,
+					`${CACHE}/official-${hit.cardID}.html`
+				)
+				const no = page.match(/<h4>No\.(\d+)/)
+				if (no) {
+					c.dexId = parseInt(no[1], 10)
+					break outer
+				}
+			}
+		}
+	}
+}
+
 // ---------- serebii (secret-rare illustrators) ----------
 
 async function serebiiIllustrators(cfg: SetConfig): Promise<Record<string, string>> {
@@ -315,6 +361,8 @@ for (const id of ids) {
 		}
 	}
 }
+
+await resolveDexViaOtherPrints(cards)
 
 for (const c of Object.values(cards)) {
 	if (c.category === 'Pokemon' && (!c.hp || !c.types.length || !c.stageRaw || c.retreat === null)) {

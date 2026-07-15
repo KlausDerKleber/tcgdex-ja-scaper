@@ -74,15 +74,32 @@ function buildRepoDexIndex(): Map<string, number> {
 	return index
 }
 
+/** lookup keys for a card name, most specific first: the raw name, the name without its
+ * ex/EX suffix, progressively without メガ prefixes (メガメガニウム → メガニウム → ニウム —
+ * the repo index strips メガ the same way, which also keeps メガヤンマ/Yanmega consistent),
+ * and — for owned Pokémon like エリカのラフレシアex — the species after the の */
+function dexKeys(name: string): string[] {
+	const keys = [name]
+	const megaStripped = (s: string) => {
+		for (keys.push(s); s.startsWith('メガ'); s = s.slice(2)) keys.push(s.slice(2))
+	}
+	const base = name.replace(/(ex|EX)$/, '').trim()
+	megaStripped(base)
+	if (base.includes('の')) megaStripped(base.slice(base.indexOf('の') + 1))
+	return [...new Set(keys)]
+}
+
 let repoDex: Map<string, number> | null = null
 function resolveDex(c: RawCard): number {
 	if (c.dexId != null) return c.dexId
-	const base = c.name.replace(/ex$/, '').replace(/^メガ/, '').trim()
-	if (config.manualDex[base] != null) return config.manualDex[base]
+	const keys = dexKeys(c.name)
+	for (const k of keys) if (config.manualDex[k] != null) return config.manualDex[k]
 	repoDex ??= buildRepoDexIndex()
-	const dex = repoDex.get(base)
-	if (dex == null) throw new Error(`card ${c.num} (${c.name}): dexId unresolved — add it to manualDex`)
-	return dex
+	for (const k of keys) {
+		const dex = repoDex.get(k)
+		if (dex != null) return dex
+	}
+	throw new Error(`card ${c.num} (${c.name}): dexId unresolved — add it to manualDex`)
 }
 
 // ---------- card file emission (format identical to the existing M-era files) ----------
@@ -219,8 +236,20 @@ const nums = Object.keys(cards).map((n) => parseInt(n, 10)).sort((a, b) => a - b
 if (nums.length !== config.totalCards) {
 	throw new Error(`expected ${config.totalCards} cards, got ${nums.length}`)
 }
+// collect per-card failures and report them all at once (766-card deck sets would
+// otherwise die one manualDex entry at a time)
+const failures: string[] = []
 for (const n of nums) {
-	writeFileSync(join(dir, `${String(n).padStart(3, '0')}.ts`), genCard(cards[String(n)]))
+	try {
+		writeFileSync(join(dir, `${String(n).padStart(3, '0')}.ts`), genCard(cards[String(n)]))
+	} catch (e) {
+		failures.push((e as Error).message)
+	}
+}
+if (failures.length) {
+	console.error(`${failures.length} cards failed:`)
+	for (const f of failures) console.error(' -', f)
+	process.exit(1)
 }
 
 // the set file is only generated when the repo does not have one yet — existing
