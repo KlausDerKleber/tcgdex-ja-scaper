@@ -62,10 +62,11 @@ async function limitlessRarities(): Promise<Map<number, string>> {
 
 // ---------- limitless: one card page ----------
 
-async function limitlessCard(n: number, rarityLabel: string | undefined): Promise<RawCard> {
+async function limitlessCard(n: number, rarityLabel: string | undefined, fromSet?: string): Promise<RawCard> {
+	const setId = fromSet ?? config.setId
 	const html = await fetchCached(
-		`https://limitlesstcg.com/cards/jp/${config.setId}/${n}`,
-		`${CACHE}/limitless-${String(n).padStart(3, '0')}.html`
+		`https://limitlesstcg.com/cards/jp/${setId}/${n}`,
+		fromSet ? `${CACHE}/limitless-${fromSet}-${n}.html` : `${CACHE}/limitless-${String(n).padStart(3, '0')}.html`
 	)
 	const card: RawCard = {
 		num: n, name: '', category: 'Pokemon', types: [], hp: null, stageRaw: null,
@@ -176,6 +177,8 @@ interface OfficialCard {
 	name: string | null
 	dexId: number | null
 	flavor: string | null
+	/** the pages link the illustrator (illust=…) — the source for secret-rare artists */
+	illustrator: string | null
 	/** Pokémon Tool text (only parsed from Tool card pages) */
 	toolClause?: string
 	/** attack granted by a Pokémon Tool (name + text; the cost only limitless lists) */
@@ -209,12 +212,14 @@ async function officialCard(cardId: string): Promise<OfficialCard | null> {
 	const name = raw.match(/<h1 class="Heading1[^"]*">([^<]+)<\/h1>/)
 	const dex = raw.match(/<h4>No\.(\d+)/)
 	const flavor = raw.match(/<hr\s*\/>\s*<p>([\s\S]*?)<\/p>/)
+	const illust = raw.match(/[?&]illust=([^"&]+)"/)
 	const card: OfficialCard = {
 		num: parseInt(col[1], 10),
 		total: parseInt(col[2], 10),
 		name: name ? clean(name[1]) : null,
 		dexId: dex ? parseInt(dex[1], 10) : null,
 		flavor: flavor ? clean(stripTags(flavor[1])) : null,
+		illustrator: illust ? clean(illust[1]) : null,
 	}
 	const tool = raw.match(/<h2[^>]*>ポケモンのどうぐ<\/h2>([\s\S]*?)(?:<h2|<\/div)/)
 	if (tool) {
@@ -367,16 +372,22 @@ console.log(`limitless list: ${rarities.size} cards`)
 const limitlessNums = [...rarities.keys()].sort((a, b) => a - b)
 const cards: Record<string, RawCard> = {}
 for (const n of limitlessNums) {
-	cards[String(n)] = await limitlessCard(n, rarities.get(n))
+	const card = await limitlessCard(n, rarities.get(n))
+	// limitless lists some sets without rarities — cardmarket's label fills in (config.ts)
+	if (!card.rarity && config.rarityOverrides?.[String(n)]) card.rarity = config.rarityOverrides[String(n)]
+	cards[String(n)] = card
 	if (n % 20 === 0) console.log(`limitless ${n}/${limitlessNums.length}`)
 }
 
 const ids = await officialCardIds()
 console.log(`official database: ${ids.length} card ids`)
 const problems: string[] = []
+// illustrators per collection number — the source generate.ts uses for secret rares
+const officialIllustrators: Record<string, string> = {}
 for (const id of ids) {
 	const o = await officialCard(id)
 	if (!o) continue
+	if (o.illustrator && officialIllustrators[String(o.num)] == null) officialIllustrators[String(o.num)] = o.illustrator
 	const c = cards[String(o.num)]
 	if (!c) continue
 	// the sources disagree on spacing within names (アローラ ロコン vs アローラロコン)
@@ -399,6 +410,18 @@ for (const id of ids) {
 	}
 }
 
+// secrets that reprint a card from another set (era-wide alt arts, e.g. SM12a):
+// the full card data comes from the original print's limitless page
+for (const [ns, info] of Object.entries(config.secrets ?? {})) {
+	if (!info.from) continue
+	const card = await limitlessCard(info.from.number, undefined, info.from.set)
+	card.num = parseInt(ns, 10)
+	card.rarity = info.rarity
+	card.illustrator = officialIllustrators[ns] ?? ''
+	card.flavor = null
+	cards[ns] = card
+}
+
 await resolveDexViaOtherPrints(cards)
 
 for (const c of Object.values(cards)) {
@@ -410,6 +433,7 @@ for (const c of Object.values(cards)) {
 }
 
 writeFileSync(`${OUT}/cards.json`, JSON.stringify(cards, null, 1))
+writeFileSync(`${OUT}/official-illustrators.json`, JSON.stringify(officialIllustrators, null, 1))
 writeFileSync(`${OUT}/energies.json`, JSON.stringify(await scrapeEnergies(config), null, 1))
 writeFileSync(`${OUT}/serebii-illustrators.json`, JSON.stringify(await serebiiIllustrators(config), null, 1))
 writeFileSync(`${OUT}/staple-texts.json`, JSON.stringify(await stapleTexts(config), null, 1))

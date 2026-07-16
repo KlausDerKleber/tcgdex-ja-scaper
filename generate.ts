@@ -30,16 +30,34 @@ const OUT = `${import.meta.dir}/out/${setId}`
 const cards: Record<string, RawCard> = JSON.parse(readFileSync(`${OUT}/cards.json`, 'utf-8'))
 const serebii: Record<string, string> = JSON.parse(readFileSync(`${OUT}/serebii-illustrators.json`, 'utf-8'))
 const stapleTexts: Record<string, string> = JSON.parse(readFileSync(`${OUT}/staple-texts.json`, 'utf-8'))
+const officialIll: Record<string, string> = existsSync(`${OUT}/official-illustrators.json`)
+	? JSON.parse(readFileSync(`${OUT}/official-illustrators.json`, 'utf-8'))
+	: {}
 
-// ---------- secret rares: reprint clones + gold staples ----------
+// ---------- secret rares: reprint clones, secret energies, gold staples ----------
 
+const secretsWithoutArtist: number[] = []
 for (const [ns, info] of Object.entries(config.secrets ?? {})) {
 	const n = parseInt(ns, 10)
-	const illustrator = serebii[ns] ?? ''
+	const illustrator = serebii[ns] ?? officialIll[ns] ?? ''
+	if (!illustrator && info.energy == null && info.from == null) secretsWithoutArtist.push(n)
 	if (info.base != null) {
 		const base = cards[String(info.base)]
 		if (!base) throw new Error(`secret ${n}: base card ${info.base} missing`)
 		cards[ns] = { ...base, num: n, rarity: info.rarity, illustrator, flavor: null }
+	} else if (info.energy) {
+		const e = ENERGY_CODES[info.energy]
+		if (!e) throw new Error(`secret ${n}: unknown energy letter ${info.energy}`)
+		cards[ns] = {
+			num: n, name: `基本${e.jp}エネルギー`, category: 'Energy', types: [], hp: null,
+			stageRaw: null, evolveFrom: null, trainerType: null, energyType: 'Basic Energy',
+			abilities: [], attacks: [], weakness: null, resistance: null, retreat: null,
+			illustrator, regulationMark: null, rarity: info.rarity, flavor: null, dexId: null,
+		}
+	} else if (info.from) {
+		// scraped in full from the original print's page (scrape.ts)
+		if (!cards[ns]) throw new Error(`secret ${n}: import from ${info.from.set}/${info.from.number} missing — re-run scrape.ts`)
+		if (!cards[ns].illustrator) secretsWithoutArtist.push(n)
 	} else if (info.staple) {
 		const effect = stapleTexts[info.staple.nameJa]
 		if (!effect) throw new Error(`secret ${n}: no official text for ${info.staple.nameJa}`)
@@ -257,12 +275,14 @@ function genCard(c: RawCard): string {
 			L.push(`\tsuffix: "${/[&＆]/.test(c.name) ? 'TAG TEAM-GX' : 'GX'}",`)
 		}
 	} else {
-		if (c.category === 'Energy') L.push('\tenergyType: "Special",')
+		if (c.category === 'Energy') L.push(`\tenergyType: "${c.energyType === 'Basic Energy' ? 'Normal' : 'Special'}",`)
 		L.push('')
-		L.push('\teffect: {')
-		L.push(`\t\tja: "${esc(c.effect ?? '')}",`)
-		L.push('\t},')
-		L.push('')
+		if (c.effect || c.energyType !== 'Basic Energy') { // basic energies carry no text
+			L.push('\teffect: {')
+			L.push(`\t\tja: "${esc(c.effect ?? '')}",`)
+			L.push('\t},')
+			L.push('')
+		}
 		pushAttacks(L, c) // an attack granted by a Pokémon Tool (e.g. CP1 025/026)
 		pushVariants(L, c, variant)
 		L.push('')
@@ -300,6 +320,9 @@ if (failures.length) {
 	console.error(`${failures.length} cards failed:`)
 	for (const f of failures) console.error(' -', f)
 	process.exit(1)
+}
+if (secretsWithoutArtist.length) {
+	console.log(`note: ${secretsWithoutArtist.length} secret rares have no illustrator from any source (official DB, serebii): ${secretsWithoutArtist.join(', ')}`)
 }
 if (missingFoils.length) {
 	console.log(`${missingFoils.length} reverse prints without a ball foil (${config.enSet ? 'no match in enSet' : 'set "enSet" in the config'}):`)

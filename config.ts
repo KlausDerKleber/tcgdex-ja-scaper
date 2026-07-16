@@ -325,20 +325,21 @@ if (numbers[0] !== 1 || numbers[numbers.length - 1] !== llCount) {
 // ---------- number assignment helpers ----------
 
 let probeCount = 0
-/** collection number of one specific product: search pokepricelab server-side for the
- * product's name — the returned rows carry number + cardmarket id, so the id pins it.
- * null when pokepricelab does not list the product (e.g. the basic energies of SM12a). */
-async function probeNumber(setSlug: string, p: { idProduct: number, name: string }): Promise<number | null> {
+/** pokepricelab row of one specific product: search server-side for the product's
+ * name — the returned rows carry number, cardmarket id and cardmarket rarity, so the
+ * id pins the card. null when pokepricelab does not list the product. */
+async function probeRow(setSlug: string, p: { idProduct: number, name: string }): Promise<PplRow | null> {
 	const q = p.name.replace(/\s*\[.*$/, '').trim()
 	const html = await fetchCached(
 		`https://pokepricelab.com/catalog?q=${encodeURIComponent(q)}&set=${setSlug}`,
 		`${BOOT}/probe-${p.idProduct}.html`
 	)
 	probeCount += 1
-	for (const m of html.matchAll(/\\"card_number\\":\\"(\d+)\\",\\"cardmarket_id\\":(\d+)/g)) {
-		if (parseInt(m[2], 10) === p.idProduct) return parseInt(m[1], 10)
-	}
-	return null
+	return parsePplRows(html).find((r) => r.cardmarket === p.idProduct) ?? null
+}
+
+async function probeNumber(setSlug: string, p: { idProduct: number, name: string }): Promise<number | null> {
+	return (await probeRow(setSlug, p))?.num ?? null
 }
 
 /** number per id-sorted product. Usually the sorted order IS the collection order, but
@@ -391,11 +392,11 @@ async function assignNumbers(items: { idProduct: number, name: string }[], ancho
 	if (assigned.size !== nums.filter((n) => n != null).length) throw new Error('number assignment has duplicates')
 	let open = nums.map((n, i) => (n == null ? i : -1)).filter((i) => i >= 0)
 	if (open.length) {
-		const JP_TYPE: Record<string, string> = { Grass: '草', Fire: '炎', Water: '水', Lightning: '雷', Psychic: '超', Fighting: '闘', Darkness: '悪', Metal: '鋼', Fairy: 'フェアリー' }
 		for (const idx of [...open]) {
 			const m = items[idx].name.match(/^(?:Basic )?(Grass|Fire|Water|Lightning|Psychic|Fighting|Darkness|Metal|Fairy) Energy$/)
 			if (!m) continue
-			const hits = [...jpNames].filter(([n, nm]) => nm === `基本${JP_TYPE[m[1]]}エネルギー` && !assigned.has(n))
+			const jp = Object.values(ENERGY_CODES).find((e) => e.type === m[1])!.jp
+			const hits = [...jpNames].filter(([n, nm]) => nm === `基本${jp}エネルギー` && !assigned.has(n))
 			if (hits.length === 1) {
 				nums[idx] = hits[0][0]
 				assigned.add(hits[0][0])
@@ -478,6 +479,150 @@ if (numbered.length >= llCount) {
 	for (const p of numbered) console.log(`  ${p.idProduct} ${p.name}`)
 }
 
+// ---------- serie (existing set stub in the repo, else longest matching serie dir) ----------
+
+let serie: string | null = null
+const dataAsia = join(repo, 'data-asia')
+if (existsSync(dataAsia)) {
+	for (const dir of readdirSync(dataAsia, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)) {
+		if (existsSync(join(dataAsia, dir, `${set.id}.ts`))) { serie = dir; break }
+	}
+	if (!serie) {
+		serie = readdirSync(dataAsia, { withFileTypes: true })
+			.filter((e) => e.isDirectory() && set.id.startsWith(e.name))
+			.map((e) => e.name)
+			.sort((a, b) => b.length - a.length)[0] ?? null
+	}
+}
+if (!serie) throw new Error(`cannot derive the data-asia serie for ${set.id} — pass --repo or add "serie" to the config by hand`)
+
+// ---------- rarities cardmarket knows but limitless does not list ----------
+
+// cardmarket rarity label → data-asia rarity name; null = the card carries no rarity
+const CM_RARITY: Record<string, string | null> = {
+	'Fixed': null,
+	'Common': 'Common',
+	'Uncommon': 'Uncommon',
+	'Rare': 'Rare',
+	'Holo Rare': 'Rare Holo',
+	'Double Rare': 'Double rare',
+	'Ultra Rare': 'Ultra Rare',
+	'Illustration Rare': 'Illustration rare',
+	'Special Illustration Rare': 'Special illustration rare',
+	// cardmarket's top tier is the era's gold cards — M era calls those Mega Hyper Rare
+	'Secret Rare': serie === 'M' ? 'Mega Hyper Rare' : 'Secret Rare',
+	'Rainbow Rare': 'Hyper rare',
+}
+const cmRarity = (label: string | null): string | null => {
+	if (label == null) return null
+	const l = label.trim()
+	if (!(l in CM_RARITY)) throw new Error(`unknown cardmarket rarity "${l}" — extend CM_RARITY`)
+	return CM_RARITY[l]
+}
+
+const rarityOverrides: Record<string, string> = {}
+const rarityless = [...set.list.values()].every((r) => r === '')
+if (!rarityless) {
+	for (const [n, label] of [...set.list.entries()].sort((a, b) => a[0] - b[0])) {
+		if (label !== '') continue
+		const id = cardmarketIds[String(n)]
+		const p = id != null ? numbered.find((x) => x.idProduct === id) : undefined
+		if (!p) continue
+		const r = cmRarity((await probeRow(slug, p))?.rarity ?? null)
+		if (r) rarityOverrides[String(n)] = r
+	}
+	if (Object.keys(rarityOverrides).length) {
+		console.log(`rarity overrides from cardmarket: ${Object.keys(rarityOverrides).length} cards limitless lists without a rarity`)
+	}
+}
+
+// ---------- secret rares beyond the limitless list (auto-derived) ----------
+
+// the secrets are reprints — the cardmarket product name matches the main-set card;
+// secret basic energies (SM12a 202–210) stand on their own
+const secrets: Record<string, { base?: number, energy?: string, from?: { set: string, number: number }, rarity: string }> = {}
+if (totalCards > llCount) {
+	const nameOf = new Map(numbered.map((p) => [p.idProduct, p.name]))
+	const mainByName = new Map<string, number[]>()
+	for (let n = 1; n <= officialCardCount; n++) {
+		const nm = nameOf.get(cardmarketIds[String(n)])
+		if (nm != null) mainByName.set(nm, [...(mainByName.get(nm) ?? []), n])
+	}
+	// era-wide alt arts have no print in the set at all (SM12a): the official database
+	// carries their Japanese name, which finds the original print via the limitless search
+	const officialNames = new Map<number, string>()
+	const findImport = async (n: number): Promise<{ set: string, number: number } | null> => {
+		if (!officialNames.size) {
+			let page = 1
+			let maxPage = 1
+			const allIds: string[] = []
+			do {
+				const raw = await fetchCached(
+					`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=&pg=${pg}&regulation_sidebar_form=all&sm_and_keyword=true&page=${page}`,
+					`${CACHE}/official-api-${page}.json`
+				)
+				const d = JSON.parse(raw) as { maxPage: number, cardList: { cardID: string }[] }
+				maxPage = d.maxPage
+				allIds.push(...d.cardList.map((c) => c.cardID))
+				page += 1
+			} while (page <= maxPage)
+			for (const cid of [...new Set(allIds)]) {
+				const pageHtml = await fetchCached(
+					`https://www.pokemon-card.com/card-search/details.php/card/${cid}/regu/all`,
+					`${CACHE}/official-${cid}.html`
+				)
+				const col = pageHtml.match(/&nbsp;(\d{3})&nbsp;\/&nbsp;(\d{3})&nbsp;/)
+				const nm = pageHtml.match(/<h1 class="Heading1[^"]*">([^<]+)<\/h1>/)
+				if (col && nm) officialNames.set(parseInt(col[1], 10), clean(nm[1]))
+			}
+		}
+		const nameJp = officialNames.get(n)
+		if (!nameJp) return null
+		const html = await fetchCached(
+			`https://limitlesstcg.com/cards/jp?q=${encodeURIComponent(nameJp)}`,
+			`${BOOT}/ll-search-${n}.html`
+		)
+		const prints = [...new Set([...html.matchAll(/\/cards\/jp\/([A-Za-z0-9-]+)\/(\d+)/g)]
+			.map((m) => `${m[1]}/${m[2]}`))]
+			.map((s) => ({ set: s.split('/')[0], number: parseInt(s.split('/')[1], 10) }))
+			.filter((x) => x.set !== set.id)
+			.sort((a, b) => a.set.localeCompare(b.set) || a.number - b.number)
+		return prints[0] ?? null
+	}
+
+	const unresolved: number[] = []
+	const byProductName = new Map<string, string>() // resolved secrets by name (HR/UR share the SR's origin)
+	for (let n = llCount + 1; n <= totalCards; n++) {
+		const id = cardmarketIds[String(n)]
+		const p = id != null ? numbered.find((x) => x.idProduct === id) : undefined
+		if (!p) { unresolved.push(n); continue }
+		const rarity = cmRarity((await probeRow(slug, p))?.rarity ?? null)
+		const basic = p.name.match(/^(?:Basic )?(Grass|Fire|Water|Lightning|Psychic|Fighting|Darkness|Metal|Fairy) Energy$/)
+		const bases = mainByName.get(p.name) ?? []
+		if (rarity && basic) {
+			secrets[String(n)] = { energy: Object.keys(ENERGY_CODES).find((l) => ENERGY_CODES[l].type === basic[1])!, rarity }
+		} else if (rarity && bases.length === 1) {
+			secrets[String(n)] = { base: bases[0], rarity }
+			byProductName.set(p.name, String(n))
+		} else if (rarity) {
+			const twin = byProductName.get(p.name)
+			const from = twin != null ? secrets[twin].from ?? null : await findImport(n)
+			if (from) {
+				secrets[String(n)] = { from, rarity }
+				byProductName.set(p.name, String(n))
+			} else {
+				unresolved.push(n)
+			}
+		} else {
+			unresolved.push(n)
+		}
+	}
+	if (Object.keys(secrets).length) console.log(`secrets auto-derived: ${Object.keys(secrets).length} (${Object.values(secrets).filter((s) => s.from).length} imported from other sets)`)
+	if (unresolved.length) {
+		console.log(`WARNING: ${unresolved.length} secret cards need hand-curation in "secrets" (no unique reprint match): ${unresolved.join(', ')}`)
+	}
+}
+
 // ---------- reverse variants („…-additionals" listings on pokepricelab) ----------
 
 // mirror-pattern reprints of the regular cards live in a separate "<slug>-additionals"
@@ -529,27 +674,7 @@ if (addHtml) {
 	}
 }
 
-// ---------- serie (existing set stub in the repo, else longest matching serie dir) ----------
-
-let serie: string | null = null
-const dataAsia = join(repo, 'data-asia')
-if (existsSync(dataAsia)) {
-	for (const dir of readdirSync(dataAsia, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name)) {
-		if (existsSync(join(dataAsia, dir, `${set.id}.ts`))) { serie = dir; break }
-	}
-	if (!serie) {
-		serie = readdirSync(dataAsia, { withFileTypes: true })
-			.filter((e) => e.isDirectory() && set.id.startsWith(e.name))
-			.map((e) => e.name)
-			.sort((a, b) => b.length - a.length)[0] ?? null
-	}
-}
-if (!serie) throw new Error(`cannot derive the data-asia serie for ${set.id} — pass --repo or add "serie" to the config by hand`)
-
 // ---------- write ----------
-
-// deck products carry no rarities at all (every list label is empty)
-const rarityless = [...set.list.values()].every((r) => r === '')
 
 const config: Record<string, unknown> = {
 	setId: set.id,
@@ -564,6 +689,8 @@ const config: Record<string, unknown> = {
 	officialCardCount,
 	totalCards,
 	manualDex: {},
+	...(Object.keys(rarityOverrides).length ? { rarityOverrides } : {}),
+	...(Object.keys(secrets).length ? { secrets } : {}),
 	cardmarketIds,
 	...(Object.keys(energies).length ? { energies } : {}),
 	...(Object.keys(reverses).length ? { reverses } : {}),
@@ -574,5 +701,5 @@ if (existsSync(path) && !force) {
 } else {
 	writeFileSync(path, JSON.stringify(config, null, '\t') + '\n')
 	console.log(`\nconfig: configs/${set.id}.config.json`)
-	console.log('note: manualDex/secrets are empty; generate.ts will fail loudly if the set needs them')
+	console.log('note: manualDex is empty and staple secrets stay uncurated; generate.ts fails loudly if the set needs them')
 }

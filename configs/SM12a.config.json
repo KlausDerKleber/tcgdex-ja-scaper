@@ -9,6 +9,299 @@
 	"officialCardCount": 173,
 	"totalCards": 226,
 	"manualDex": {},
+	"rarityOverrides": {
+		"12": "Rare Holo",
+		"21": "Rare Holo",
+		"37": "Rare Holo",
+		"49": "Rare Holo",
+		"58": "Rare Holo",
+		"70": "Rare Holo",
+		"77": "Rare Holo",
+		"91": "Rare Holo",
+		"108": "Rare Holo",
+		"144": "Rare Holo",
+		"163": "Rare Holo",
+		"166": "Rare Holo",
+		"167": "Rare Holo",
+		"168": "Rare Holo",
+		"169": "Rare Holo",
+		"170": "Rare Holo",
+		"172": "Rare Holo"
+	},
+	"secrets": {
+		"174": {
+			"base": 39,
+			"rarity": "Ultra Rare"
+		},
+		"175": {
+			"base": 48,
+			"rarity": "Ultra Rare"
+		},
+		"176": {
+			"from": {
+				"set": "SMM",
+				"number": 1
+			},
+			"rarity": "Ultra Rare"
+		},
+		"177": {
+			"from": {
+				"set": "SMM",
+				"number": 1
+			},
+			"rarity": "Ultra Rare"
+		},
+		"178": {
+			"base": 53,
+			"rarity": "Ultra Rare"
+		},
+		"179": {
+			"base": 53,
+			"rarity": "Ultra Rare"
+		},
+		"180": {
+			"from": {
+				"set": "SMM",
+				"number": 2
+			},
+			"rarity": "Ultra Rare"
+		},
+		"181": {
+			"from": {
+				"set": "SMM",
+				"number": 10
+			},
+			"rarity": "Ultra Rare"
+		},
+		"182": {
+			"from": {
+				"set": "SMM",
+				"number": 10
+			},
+			"rarity": "Ultra Rare"
+		},
+		"183": {
+			"from": {
+				"set": "SMM",
+				"number": 15
+			},
+			"rarity": "Ultra Rare"
+		},
+		"184": {
+			"from": {
+				"set": "SM9b",
+				"number": 29
+			},
+			"rarity": "Ultra Rare"
+		},
+		"185": {
+			"base": 94,
+			"rarity": "Ultra Rare"
+		},
+		"186": {
+			"base": 94,
+			"rarity": "Ultra Rare"
+		},
+		"187": {
+			"from": {
+				"set": "SMI",
+				"number": 17
+			},
+			"rarity": "Ultra Rare"
+		},
+		"188": {
+			"from": {
+				"set": "SMI",
+				"number": 17
+			},
+			"rarity": "Ultra Rare"
+		},
+		"189": {
+			"from": {
+				"set": "SM11b",
+				"number": 44
+			},
+			"rarity": "Ultra Rare"
+		},
+		"190": {
+			"base": 146,
+			"rarity": "Ultra Rare"
+		},
+		"191": {
+			"base": 147,
+			"rarity": "Ultra Rare"
+		},
+		"192": {
+			"base": 149,
+			"rarity": "Ultra Rare"
+		},
+		"193": {
+			"from": {
+				"set": "SM11",
+				"number": 87
+			},
+			"rarity": "Ultra Rare"
+		},
+		"194": {
+			"base": 152,
+			"rarity": "Ultra Rare"
+		},
+		"195": {
+			"from": {
+				"set": "SMM",
+				"number": 27
+			},
+			"rarity": "Ultra Rare"
+		},
+		"196": {
+			"base": 154,
+			"rarity": "Ultra Rare"
+		},
+		"197": {
+			"from": {
+				"set": "M4",
+				"number": 77
+			},
+			"rarity": "Ultra Rare"
+		},
+		"198": {
+			"base": 156,
+			"rarity": "Ultra Rare"
+		},
+		"199": {
+			"from": {
+				"set": "SM11b",
+				"number": 48
+			},
+			"rarity": "Ultra Rare"
+		},
+		"200": {
+			"base": 157,
+			"rarity": "Ultra Rare"
+		},
+		"201": {
+			"base": 159,
+			"rarity": "Ultra Rare"
+		},
+		"202": {
+			"energy": "G",
+			"rarity": "Ultra Rare"
+		},
+		"203": {
+			"energy": "R",
+			"rarity": "Ultra Rare"
+		},
+		"204": {
+			"energy": "W",
+			"rarity": "Ultra Rare"
+		},
+		"205": {
+			"energy": "L",
+			"rarity": "Ultra Rare"
+		},
+		"206": {
+			"energy": "P",
+			"rarity": "Ultra Rare"
+		},
+		"207": {
+			"energy": "F",
+			"rarity": "Ultra Rare"
+		},
+		"208": {
+			"energy": "D",
+			"rarity": "Ultra Rare"
+		},
+		"209": {
+			"energy": "M",
+			"rarity": "Ultra Rare"
+		},
+		"210": {
+			"energy": "Y",
+			"rarity": "Ultra Rare"
+		},
+		"211": {
+			"base": 39,
+			"rarity": "Hyper rare"
+		},
+		"212": {
+			"from": {
+				"set": "SMM",
+				"number": 1
+			},
+			"rarity": "Hyper rare"
+		},
+		"213": {
+			"base": 53,
+			"rarity": "Hyper rare"
+		},
+		"214": {
+			"from": {
+				"set": "SMM",
+				"number": 2
+			},
+			"rarity": "Hyper rare"
+		},
+		"215": {
+			"from": {
+				"set": "SMM",
+				"number": 10
+			},
+			"rarity": "Hyper rare"
+		},
+		"216": {
+			"from": {
+				"set": "SMM",
+				"number": 15
+			},
+			"rarity": "Hyper rare"
+		},
+		"217": {
+			"from": {
+				"set": "SM9b",
+				"number": 29
+			},
+			"rarity": "Hyper rare"
+		},
+		"218": {
+			"base": 94,
+			"rarity": "Hyper rare"
+		},
+		"219": {
+			"from": {
+				"set": "SMI",
+				"number": 17
+			},
+			"rarity": "Hyper rare"
+		},
+		"220": {
+			"base": 16,
+			"rarity": "Secret Rare"
+		},
+		"221": {
+			"base": 41,
+			"rarity": "Secret Rare"
+		},
+		"222": {
+			"base": 52,
+			"rarity": "Secret Rare"
+		},
+		"223": {
+			"base": 72,
+			"rarity": "Secret Rare"
+		},
+		"224": {
+			"base": 83,
+			"rarity": "Secret Rare"
+		},
+		"225": {
+			"base": 99,
+			"rarity": "Secret Rare"
+		},
+		"226": {
+			"base": 102,
+			"rarity": "Secret Rare"
+		}
+	},
 	"cardmarketIds": {
 		"1": 543366,
 		"2": 543376,

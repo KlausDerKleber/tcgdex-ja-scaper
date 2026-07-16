@@ -6,11 +6,12 @@ import { dirname } from 'node:path'
 
 export const UA = 'Mozilla/5.0 (compatible; ja-set-scraper/1.0)'
 
-/** limitless letter code → energy type + tcgdex file code (cf. data-asia/S/SI: GRA.ts …) */
-export const ENERGY_CODES: Record<string, { type: string, code: string }> = {
-	G: { type: 'Grass', code: 'GRA' }, R: { type: 'Fire', code: 'FIR' }, W: { type: 'Water', code: 'WAT' },
-	L: { type: 'Lightning', code: 'LIG' }, P: { type: 'Psychic', code: 'PSY' }, F: { type: 'Fighting', code: 'FIG' },
-	D: { type: 'Darkness', code: 'DAR' }, M: { type: 'Metal', code: 'MET' }, Y: { type: 'Fairy', code: 'FAI' },
+/** limitless letter code → energy type + tcgdex file code (cf. data-asia/S/SI: GRA.ts …)
+ * + the Japanese type word (基本<jp>エネルギー is the basic energy's card name) */
+export const ENERGY_CODES: Record<string, { type: string, code: string, jp: string }> = {
+	G: { type: 'Grass', code: 'GRA', jp: '草' }, R: { type: 'Fire', code: 'FIR', jp: '炎' }, W: { type: 'Water', code: 'WAT', jp: '水' },
+	L: { type: 'Lightning', code: 'LIG', jp: '雷' }, P: { type: 'Psychic', code: 'PSY', jp: '超' }, F: { type: 'Fighting', code: 'FIG', jp: '闘' },
+	D: { type: 'Darkness', code: 'DAR', jp: '悪' }, M: { type: 'Metal', code: 'MET', jp: '鋼' }, Y: { type: 'Fairy', code: 'FAI', jp: 'フェアリー' },
 }
 
 export interface Ability {
@@ -56,6 +57,10 @@ export interface SecretEntry {
 	base?: number
 	/** gold staple without a base card in this set (text taken from its most recent official print) */
 	staple?: { nameJa: string, trainerType: 'Item' | 'Tool' }
+	/** secret basic energy (letter code, cf. ENERGY_CODES) */
+	energy?: string
+	/** reprint of a card from another set (era-wide alt arts, e.g. SM12a) — scraped from there */
+	from?: { set: string, number: number }
 	rarity: string
 }
 
@@ -71,6 +76,8 @@ export interface SetConfig {
 	regulationMarks?: boolean
 	/** false for products whose cards carry no rarity at all (deck sets, cf. data-asia/S/SI) */
 	rarities?: boolean
+	/** rarities cardmarket knows but limitless does not list (number → data-asia rarity name) */
+	rarityOverrides?: Record<string, string>
 	/** resistance value of the set's era when the source omits it (default: "-30"; XY era: "-20") */
 	resistanceValue?: string
 	officialProductId: number
