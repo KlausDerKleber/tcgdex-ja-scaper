@@ -11,6 +11,7 @@ catalog URL:
 ```
 bun run import.ts "https://pokepricelab.com/catalog?q=&set=abyss-eye&language=all&condition=all&grade=all" --repo ../cards-database
 bun run import.ts "abyss eye"               # a set name works too
+bun run import.ts remix-bout dream-league tag-all-stars   # several sets back to back
 ```
 
 which chains the five steps (each also runs standalone):
