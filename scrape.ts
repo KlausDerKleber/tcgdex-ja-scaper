@@ -398,8 +398,9 @@ for (const id of ids) {
 	if (o.illustrator && officialIllustrators[String(o.num)] == null) officialIllustrators[String(o.num)] = o.illustrator
 	const c = cards[String(o.num)]
 	if (!c) continue
-	// the sources disagree on spacing within names (アローラ ロコン vs アローラロコン)
-	const squash = (s: string) => s.normalize('NFKC').replace(/\s+/g, '')
+	// the sources disagree on spacing (アローラ ロコン vs アローラロコン) and limitless
+	// abbreviates フェアリー as 妖 in unit-energy names
+	const squash = (s: string) => s.normalize('NFKC').replace(/\s+/g, '').replace(/妖/g, 'フェアリー')
 	if (o.name && squash(o.name) !== squash(c.name)) problems.push(`${o.num}: name mismatch limitless=${c.name} official=${o.name}`)
 	c.dexId = o.dexId
 	c.flavor = o.flavor

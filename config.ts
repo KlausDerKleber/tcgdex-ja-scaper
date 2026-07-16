@@ -233,10 +233,17 @@ if (!title) throw new Error(`no card name on limitless page ${set.id}/${firstNum
 const name001 = clean(title[1])
 const regulationMarks = /([A-Z])\s*Regulation Mark/.test(cardHtml)
 
-const search = JSON.parse(await fetchCached(
-	`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=${encodeURIComponent(name001)}&regulation_sidebar_form=all&sm_and_keyword=true`,
-	`${CACHE}/official-search-${String(firstNum).padStart(3, '0')}.json`
-)) as { cardList: { cardID: string, cardNameViewText: string }[] }
+// the search paginates (ストライク has dozens of prints) — walk up to five pages
+const searchHits: { cardID: string, cardNameViewText: string }[] = []
+for (let sp = 1; sp <= 5; sp++) {
+	const d = JSON.parse(await fetchCached(
+		`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=${encodeURIComponent(name001)}&regulation_sidebar_form=all&sm_and_keyword=true&page=${sp}`,
+		`${CACHE}/official-search-${String(firstNum).padStart(3, '0')}-${sp}.json`
+	)) as { maxPage: number, cardList: { cardID: string, cardNameViewText: string }[] }
+	searchHits.push(...d.cardList)
+	if (sp >= d.maxPage) break
+}
+const search = { cardList: searchHits }
 
 // the official pages write set names with ideographic/extra spaces (TAG TEAM GX タッグ…
 // vs the tooltip's TAG TEAM GXタッグ…) — compare NFKC-normalized and space-free
@@ -246,8 +253,9 @@ const hasSetName = (s: string) => squash(s).includes(squash(nameJa))
 let pg: number | null = null
 let officialCardCount: number | null = null
 let detailsPage: string | null = null
-// cardNameViewText comes back HTML-encoded (フェローチェ&amp;マッシブーンGX) — clean() decodes
-for (const hit of search.cardList.filter((c) => clean(c.cardNameViewText) === name001)) {
+// cardNameViewText comes back HTML-encoded (フェローチェ&amp;マッシブーンGX) and spacing
+// differs between the sources (アローラ サンド vs アローラサンド) — compare squashed
+for (const hit of search.cardList.filter((c) => squash(clean(c.cardNameViewText)) === squash(name001))) {
 	const page = await fetchCached(
 		`https://www.pokemon-card.com/card-search/details.php/card/${hit.cardID}/regu/all`,
 		`${CACHE}/official-${hit.cardID}.html`
@@ -283,7 +291,7 @@ if (pgEntries.length === 1) {
 	const product = detailsPage.match(/href="(\/products\/[^"]+\.html)"/) ?? detailsPage.match(/href="(\/ex\/[a-z0-9-]+)\/?"/)
 	if (!product) throw new Error(`could not derive the official pg id for 「${nameJa}」 — neither in the card-search product list nor via a product/ex page link`)
 	const productHtml = await fetchCached(`https://www.pokemon-card.com${product[1]}`, `${CACHE}/official-product.html`)
-	const pgs = [...new Set([...productHtml.matchAll(/[?&]pg=(\d+)/g)].map((m) => m[1]))]
+	const pgs = [...new Set([...productHtml.matchAll(/[?&](?:amp;)?pg=(\d+)/g)].map((m) => m[1]))]
 	if (pgs.length !== 1) throw new Error(`${product[1]} links ${pgs.length} different pg ids (${pgs.join(', ')})`)
 	pg = parseInt(pgs[0], 10)
 }
