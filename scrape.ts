@@ -223,15 +223,18 @@ async function officialCard(cardId: string): Promise<OfficialCard | null> {
 		flavor: flavor ? clean(stripTags(flavor[1])) : null,
 		illustrator: illust ? clean(illust[1]) : null,
 	}
-	const tool = raw.match(/<h2[^>]*>ポケモンのどうぐ<\/h2>([\s\S]*?)(?:<h2|<\/div)/)
+	// Tool/Item text lives under a heading that varies by era (ポケモンのどうぐ, or グッズ
+	// on SM-era pages); it fills in when limitless lacks the card's own text
+	const tool = raw.match(/<h2[^>]*>(?:ポケモンのどうぐ|グッズ)<\/h2>([\s\S]*?)(?:<h2|<\/div)/)
 	if (tool) {
 		const ps = [...tool[1].matchAll(/<p>([\s\S]*?)<\/p>/g)]
 			.map((m) => clean(stripTags(m[1])))
 			.filter((p) => p && !RULE_REMINDERS.has(p))
-		if (ps.length !== 1) throw new Error(`card ${card.num}: expected exactly one Tool text paragraph, got ${ps.length}`)
-		card.toolClause = ps[0]
-		const attack = raw.match(/<h2[^>]*>ワザ<\/h2>\s*<h4[^>]*>([\s\S]*?)<\/h4>\s*<p>([\s\S]*?)<\/p>/)
-		if (attack) card.toolAttack = { name: clean(stripTags(attack[1])), effect: clean(stripTags(attack[2])) }
+		if (ps.length === 1) {
+			card.toolClause = ps[0]
+			const attack = raw.match(/<h2[^>]*>ワザ<\/h2>\s*<h4[^>]*>([\s\S]*?)<\/h4>\s*<p>([\s\S]*?)<\/p>/)
+			if (attack) card.toolAttack = { name: clean(stripTags(attack[1])), effect: clean(stripTags(attack[2])) }
+		}
 	}
 	return card
 }
