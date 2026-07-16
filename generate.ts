@@ -228,8 +228,8 @@ function genCard(c: RawCard): string {
 	L.push(`\tillustrator: "${esc(c.illustrator || '')}",`)
 	L.push(`\tcategory: "${c.category}",`)
 
-	// rarity-less deck cards (cf. data-asia/S/SI) are plain prints
-	const variant = c.rarity === 'Common' || c.rarity === 'Uncommon' || c.rarity == null ? 'normal' : 'holo'
+	// rarity-less deck cards (cf. data-asia/S/SI) and promos are plain prints
+	const variant = c.rarity === 'Common' || c.rarity === 'Uncommon' || c.rarity === 'Promo' || c.rarity == null ? 'normal' : 'holo'
 
 	if (c.category === 'Pokemon') {
 		L.push(`\thp: ${c.hp},`)
@@ -304,7 +304,8 @@ const dir = join(outBase, config.setId)
 mkdirSync(dir, { recursive: true })
 
 const nums = Object.keys(cards).map((n) => parseInt(n, 10)).sort((a, b) => a - b)
-if (nums.length !== config.totalCards) {
+// promo numbering is gapped and grows — whatever limitless lists is the current state
+if (config.promo !== true && nums.length !== config.totalCards) {
 	throw new Error(`expected ${config.totalCards} cards, got ${nums.length}`)
 }
 // collect per-card failures and report them all at once (766-card deck sets would

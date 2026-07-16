@@ -134,8 +134,9 @@ interface LlSet { id: string, name: string, date: string }
 
 function parseLimitlessSets(html: string): LlSet[] {
 	const out: LlSet[] = []
-	for (const m of html.matchAll(/<a href="\/cards\/jp\/([A-Za-z0-9-]+)">(?:<img[^>]*>)?\s*([^<]+?)\s*<span class="code annotation">[\s\S]*?<a href="\/cards\/jp\/\1">([0-9]{1,2} [A-Z][a-z]{2} [0-9]{2})<\/a>/g)) {
-		out.push({ id: m[1], name: clean(m[2]), date: m[3] })
+	// promo series have an empty release-date cell
+	for (const m of html.matchAll(/<a href="\/cards\/jp\/([A-Za-z0-9-]+)">(?:<img[^>]*>)?\s*([^<]+?)\s*<span class="code annotation">[\s\S]*?<a href="\/cards\/jp\/\1">([0-9]{1,2} [A-Z][a-z]{2} [0-9]{2})?<\/a>/g)) {
+		out.push({ id: m[1], name: clean(m[2]), date: m[3] ?? '' })
 	}
 	return out
 }
@@ -203,13 +204,19 @@ if (!pool.length || (pool.length > 1 && pool[0].score === pool[1].score)) {
 const set = pool[0]
 console.log(`limitless: ${set.id} "${set.name}", released ${set.date}, ${set.list.size} cards listed`)
 
+// ongoing promo series: tcgdex names them <serie>-P (data-asia/SV/SV-P) while
+// limitless says SVP/MP; their official card list id is the same <serie>-P string
+const limitlessId = set.id
+const isPromo = /\bpromos?\b/i.test(`${pplName ? pplName[1] : ''} ${set.name}`)
+if (isPromo && /^[A-Za-z]+P$/.test(set.id)) set.id = `${set.id.slice(0, -1)}-P`
+
 const CACHE = `${import.meta.dir}/out/${set.id}/cache`
 mkdirSync(CACHE, { recursive: true })
 const llCount = set.list.size
 
 // ---------- Japanese set name (list page tooltip) + release date ----------
 
-const listHtml = await fetchCached(`https://limitlesstcg.com/cards/jp/${set.id}?display=list`, `${CACHE}/limitless-list.html`)
+const listHtml = await fetchCached(`https://limitlesstcg.com/cards/jp/${limitlessId}?display=list`, `${CACHE}/limitless-list.html`)
 const jpTooltip = [...listHtml.matchAll(/data-tooltip="([^"]*[぀-ヿ㐀-鿿][^"]*)"/g)].map((m) => clean(m[1]))[0]
 if (!jpTooltip) throw new Error('no Japanese set name tooltip on the limitless list page')
 // tooltip formats: 拡張パック「アビスアイ」 / 強化拡張パック ドリームリーグ / アビスアイ
@@ -220,14 +227,24 @@ const nameJa = wrapped
 
 const MONTHS: Record<string, string> = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' }
 const dm = set.date.match(/^(\d{1,2}) ([A-Z][a-z]{2}) (\d{2})$/)
-if (!dm || !MONTHS[dm[2]]) throw new Error(`cannot parse release date "${set.date}"`)
-const releaseDate = `${parseInt(dm[3], 10) >= 90 ? '19' : '20'}${dm[3]}-${MONTHS[dm[2]]}-${dm[1].padStart(2, '0')}`
+let releaseDate: string
+if (dm && MONTHS[dm[2]]) {
+	releaseDate = `${parseInt(dm[3], 10) >= 90 ? '19' : '20'}${dm[3]}-${MONTHS[dm[2]]}-${dm[1].padStart(2, '0')}`
+} else if (isPromo) {
+	// promo series carry no date on limitless — the first cardmarket product's creation
+	// date marks the series' start
+	const dates = expansion.map((p) => (p as { dateAdded?: string }).dateAdded ?? '').filter((d) => d && !d.startsWith('0000')).sort()
+	if (!dates.length) throw new Error('no release date anywhere — set releaseDate in the config by hand')
+	releaseDate = dates[0].slice(0, 10)
+} else {
+	throw new Error(`cannot parse release date "${set.date}"`)
+}
 
 // ---------- official database: pg id + official card count ----------
 
 const firstNum = Math.min(...set.list.keys())
 const cardHtml = await fetchCached(
-	`https://limitlesstcg.com/cards/jp/${set.id}/${firstNum}`,
+	`https://limitlesstcg.com/cards/jp/${limitlessId}/${firstNum}`,
 	`${CACHE}/limitless-${String(firstNum).padStart(3, '0')}.html`
 )
 const title = cardHtml.match(/<span class="card-text-name"><a[^>]*>([^<]+)<\/a><\/span>/)
@@ -239,7 +256,7 @@ const regulationMarks = /([A-Z])\s*Regulation Mark/.test(cardHtml) && releaseDat
 
 // the search paginates (ストライク has dozens of prints) — walk up to five pages
 const searchHits: { cardID: string, cardNameViewText: string }[] = []
-for (let sp = 1; sp <= 5; sp++) {
+for (let sp = 1; !isPromo && sp <= 5; sp++) {
 	const d = JSON.parse(await fetchCached(
 		`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=${encodeURIComponent(name001)}&regulation_sidebar_form=all&sm_and_keyword=true&page=${sp}`,
 		`${CACHE}/official-search-${String(firstNum).padStart(3, '0')}-${sp}.json`
@@ -256,13 +273,19 @@ const search = { cardList: searchHits }
 const squash = (s: string) => s.normalize('NFKC').replace(/\s+/g, '')
 const hasSetName = (s: string) => squash(s).includes(squash(`「${nameJa}」`)) || squash(s).includes(squash(jpTooltip))
 
-let pg: number | null = null
+let pg: number | string | null = null
 let officialCardCount: number | null = null
 let detailsPage: string | null = null
 let card001Id: string | null = null
+if (isPromo) {
+	// promo lists use the <serie>-P string as their pg and count no official total
+	pg = set.id
+	officialCardCount = 0
+	detailsPage = ''
+}
 // cardNameViewText comes back HTML-encoded (フェローチェ&amp;マッシブーンGX) and spacing
 // differs between the sources (アローラ サンド vs アローラサンド) — compare squashed
-for (const hit of search.cardList.filter((c) => squash(clean(c.cardNameViewText)) === squash(name001))) {
+for (const hit of (isPromo ? [] : search.cardList).filter((c) => squash(clean(c.cardNameViewText)) === squash(name001))) {
 	const page = await fetchCached(
 		`https://www.pokemon-card.com/card-search/details.php/card/${hit.cardID}/regu/all`,
 		`${CACHE}/official-${hit.cardID}.html`
@@ -354,7 +377,7 @@ const api = JSON.parse(await fetchCached(
 	`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=&pg=${pg}&regulation_sidebar_form=all&sm_and_keyword=true&page=1`,
 	`${CACHE}/official-api-${pg}-1.json`
 )) as { hitCnt: number, cardList: { cardID: string }[] }
-if (api.hitCnt < officialCardCount || api.hitCnt > 2 * Math.max(officialCardCount, llCount)) {
+if (isPromo ? api.hitCnt < 1 : (api.hitCnt < officialCardCount || api.hitCnt > 2 * Math.max(officialCardCount, llCount))) {
 	throw new Error(`pg=${pg} lists ${api.hitCnt} cards — implausible for ${officialCardCount} official / ${llCount} limitless cards`)
 }
 console.log(`official: pg=${pg}, ${officialCardCount} cards, regulation marks: ${regulationMarks}`)
@@ -380,7 +403,7 @@ if (resistanceValue) console.log(`era resistance value: ${resistanceValue}`)
 // and SV2a's full dex-ordered numbering.)
 
 const numbers = [...set.list.keys()].sort((a, b) => a - b)
-if (numbers[0] !== 1 || numbers[numbers.length - 1] !== llCount) {
+if (!isPromo && (numbers[0] !== 1 || numbers[numbers.length - 1] !== llCount)) {
 	throw new Error(`limitless numbering is not contiguous 1..${llCount} — extend config.ts`)
 }
 
@@ -494,7 +517,7 @@ if (expansion.length !== llCount) {
 		// energies) — pokepricelab lists those with a number, so a probe tells them apart;
 		// the rest are unnumbered letter cards when limitless lists them (/cards/jp/MC/G),
 		// otherwise plain pack inserts outside the set
-		const letterRows = new Set([...listHtml.matchAll(new RegExp(`<a href="/cards/jp/${set.id}/([A-Z])">`, 'g'))].map((m) => m[1]))
+		const letterRows = new Set([...listHtml.matchAll(new RegExp(`<a href="/cards/jp/${limitlessId}/([A-Z])">`, 'g'))].map((m) => m[1]))
 		const inserts = new Set<number>()
 		for (const p of basics) {
 			if ((await probeNumber(slug, p)) != null) continue
@@ -517,14 +540,32 @@ if (expansion.length !== llCount) {
 // then the real total; any wrong assignment (or a wrong set match) trips on the samples
 const cardmarketIds: Record<string, number> = {}
 let totalCards = llCount
-if (numbered.length >= llCount) {
+if (isPromo) {
+	// promo numbering is gapped and grows over time — no order to assume, every
+	// product is placed by its own pokepricelab probe
+	totalCards = numbers[numbers.length - 1]
+	const unlisted: string[] = []
+	for (const p of numbered) {
+		const row = await probeRow(slug, p)
+		if (row == null) {
+			unlisted.push(`${p.idProduct} (${p.name.slice(0, 24)})`)
+			continue
+		}
+		if (cardmarketIds[String(row.num)] != null) throw new Error(`promo number ${row.num} probed twice (${cardmarketIds[String(row.num)]} and ${p.idProduct})`)
+		cardmarketIds[String(row.num)] = p.idProduct
+		if (row.num > totalCards) totalCards = row.num
+	}
+	console.log(`cardmarket ids: ${Object.keys(cardmarketIds).length} promos placed by probe${unlisted.length ? `; not on pokepricelab: ${unlisted.join(', ')}` : ''}`)
+	const beyond = Object.keys(cardmarketIds).map(Number).filter((n) => !set.list.has(n)).sort((a, b) => a - b)
+	if (beyond.length) console.log(`note: promos not on limitless yet (no card data until they list them): ${beyond.join(', ')}`)
+} else if (numbered.length >= llCount) {
 	totalCards = numbered.length
 	const ordered = samples.every((s) => numbered[s.num - 1]?.idProduct === s.cardmarket)
 	if (ordered) {
 		numbered.forEach((p, i) => { cardmarketIds[String(i + 1)] = p.idProduct })
 	} else {
 		// the plain id order disagrees with the samples — repair via probes
-		const assigned = await assignNumbers(numbered, new Map(samples.map((s) => [s.cardmarket, s.num])), slug, parseLimitlessNames(listHtml, set.id))
+		const assigned = await assignNumbers(numbered, new Map(samples.map((s) => [s.cardmarket, s.num])), slug, parseLimitlessNames(listHtml, limitlessId))
 		const sorted = [...assigned.values()].sort((a, b) => a - b)
 		if (sorted[0] !== 1) throw new Error('repaired numbering does not start at 1')
 		totalCards = Math.max(sorted[sorted.length - 1], llCount)
@@ -578,6 +619,7 @@ const CM_RARITY: Record<string, string | null> = {
 	'Character Super Rare': 'Character Super Rare',
 	'Shiny Rare': 'Shiny rare',
 	'Shiny Ultra Rare': 'Shiny Ultra Rare',
+	'Promo': 'Promo',
 }
 const cmRarity = (label: string | null): string | null => {
 	if (label == null) return null
@@ -607,7 +649,7 @@ if (!rarityless) {
 // the secrets are reprints — the cardmarket product name matches the main-set card;
 // secret basic energies (SM12a 202–210) stand on their own
 const secrets: Record<string, { base?: number, energy?: string, from?: { set: string, number: number }, rarity: string }> = {}
-if (totalCards > llCount) {
+if (!isPromo && totalCards > llCount) {
 	const nameOf = new Map(numbered.map((p) => [p.idProduct, p.name]))
 	const mainByName = new Map<string, number[]>()
 	for (let n = 1; n <= officialCardCount; n++) {
@@ -799,9 +841,10 @@ const config: Record<string, unknown> = {
 	pplSlug: slug,
 	releaseDate,
 	serie,
+	...(isPromo ? { promo: true, limitlessId } : {}),
 	...(serebiiSlug ? { serebiiSlug } : {}),
 	...(regulationMarks ? {} : { regulationMarks: false }),
-	...(rarityless ? { rarities: false } : {}),
+	...(rarityless && !isPromo ? { rarities: false } : {}),
 	...(resistanceValue && resistanceValue !== '-30' ? { resistanceValue } : {}),
 	officialProductId: pg,
 	officialCardCount,

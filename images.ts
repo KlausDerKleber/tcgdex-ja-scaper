@@ -18,6 +18,7 @@ if (!setId) {
 	process.exit(1)
 }
 const config = loadConfig(setId)
+const LL = config.limitlessId ?? config.setId
 const CACHE = `${import.meta.dir}/out/${setId}/cache`
 const DIR = `${import.meta.dir}/images/${setId}`
 mkdirSync(DIR, { recursive: true })
@@ -34,7 +35,7 @@ async function download(url: string, file: string): Promise<boolean> {
 }
 
 const listHtml = await fetchCached(
-	`https://limitlesstcg.com/cards/jp/${setId}?display=list`,
+	`https://limitlesstcg.com/cards/jp/${LL}?display=list`,
 	`${CACHE}/limitless-list.html`
 )
 
@@ -42,17 +43,17 @@ const listHtml = await fetchCached(
 // deck's basic energies and are saved under their tcgdex code (G → GRA.png)
 const images = new Map<number, string>()
 const energyImages = new Map<string, string>()
-for (const row of listHtml.matchAll(new RegExp(`<tr[^>]*data-hover="([^"]*/tpc/${setId}/[^"]*)"[^>]*>([\\s\\S]*?)</tr>`, 'g'))) {
+for (const row of listHtml.matchAll(new RegExp(`<tr[^>]*data-hover="([^"]*/tpc/${LL}/[^"]*)"[^>]*>([\\s\\S]*?)</tr>`, 'g'))) {
 	const url = row[1].replace(/_XS\.png$/, '.png')
-	const link = row[2].match(new RegExp(`<a href="/cards/jp/${setId}/(\\d+)">`))
+	const link = row[2].match(new RegExp(`<a href="/cards/jp/${LL}/(\\d+)">`))
 	if (link) {
 		images.set(parseInt(link[1], 10), url)
 		continue
 	}
-	const letter = row[2].match(new RegExp(`<a href="/cards/jp/${setId}/([A-Z])">`))
+	const letter = row[2].match(new RegExp(`<a href="/cards/jp/${LL}/([A-Z])">`))
 	if (letter && ENERGY_CODES[letter[1]]) energyImages.set(ENERGY_CODES[letter[1]].code, url)
 }
-if (!images.size) throw new Error(`no card rows on the limitless list page for ${setId}`)
+if (!images.size) throw new Error(`no card rows on the limitless list page for ${LL}`)
 
 let fresh = 0
 for (const [num, url] of [...images.entries()].sort((a, b) => a[0] - b[0])) {
@@ -92,14 +93,16 @@ async function fetchFallback(url: string, n: number, ext: string): Promise<boole
 	return true
 }
 
-const missing = Array.from({ length: config.totalCards }, (_, i) => i + 1).filter((n) => !images.has(n))
+// promo numbering is gapped — only numbers that exist anywhere count as missing
+const missing = Array.from({ length: config.totalCards }, (_, i) => i + 1)
+	.filter((n) => !images.has(n) && (config.promo !== true || config.cardmarketIds[String(n)] != null))
 const CACHE_DIR = `${import.meta.dir}/out/${setId}/cache`
 let official = 0
 let ppl = 0
 if (missing.length && existsSync(CACHE_DIR)) {
 	// official large scans, mapped via the cached search listing + card pages
 	const thumbs = new Map<number, string>()
-	for (const f of readdirSync(CACHE_DIR).filter((x) => /^official-api-\d+\.json$/.test(x))) {
+	for (const f of readdirSync(CACHE_DIR).filter((x) => /^official-api-.+\.json$/.test(x))) {
 		const d = JSON.parse(readFileSync(`${CACHE_DIR}/${f}`, 'utf-8')) as { cardList?: { cardID: string, cardThumbFile?: string }[] }
 		for (const c of d.cardList ?? []) {
 			const page = `${CACHE_DIR}/official-${c.cardID}.html`

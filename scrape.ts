@@ -42,6 +42,8 @@ if (!setId) {
 	process.exit(1)
 }
 const config = loadConfig(setId)
+// limitless calls promo series MP/SVP while tcgdex says M-P/SV-P
+const LL = config.limitlessId ?? config.setId
 const OUT = `${import.meta.dir}/out/${setId}`
 const CACHE = `${OUT}/cache`
 mkdirSync(OUT, { recursive: true })
@@ -50,12 +52,12 @@ mkdirSync(OUT, { recursive: true })
 
 async function limitlessRarities(): Promise<Map<number, string>> {
 	const html = await fetchCached(
-		`https://limitlesstcg.com/cards/jp/${config.setId}?display=list`,
+		`https://limitlesstcg.com/cards/jp/${LL}?display=list`,
 		`${CACHE}/limitless-list.html`
 	)
 	const out = new Map<number, string>()
-	for (const row of html.matchAll(new RegExp(`<tr[^>]*data-hover="[^"]*/tpc/${config.setId}/[^"]*"[^>]*>([\\s\\S]*?)</tr>`, 'g'))) {
-		const link = row[1].match(new RegExp(`<a href="/cards/jp/${config.setId}/(\\d+)">`))
+	for (const row of html.matchAll(new RegExp(`<tr[^>]*data-hover="[^"]*/tpc/${LL}/[^"]*"[^>]*>([\\s\\S]*?)</tr>`, 'g'))) {
+		const link = row[1].match(new RegExp(`<a href="/cards/jp/${LL}/(\\d+)">`))
 		const tds = [...row[1].matchAll(/<td class="md-only">\s*<a[^>]*>\s*([^<]*?)\s*</g)].map((m) => m[1])
 		if (link) out.set(parseInt(link[1], 10), tds[tds.length - 1] ?? '')
 	}
@@ -65,7 +67,7 @@ async function limitlessRarities(): Promise<Map<number, string>> {
 // ---------- limitless: one card page ----------
 
 async function limitlessCard(n: number, rarityLabel: string | undefined, fromSet?: string): Promise<RawCard> {
-	const setId = fromSet ?? config.setId
+	const setId = fromSet ?? LL
 	const html = await fetchCached(
 		`https://limitlesstcg.com/cards/jp/${setId}/${n}`,
 		fromSet ? `${CACHE}/limitless-${fromSet}-${n}.html` : `${CACHE}/limitless-${String(n).padStart(3, '0')}.html`
@@ -209,7 +211,8 @@ async function officialCard(cardId: string): Promise<OfficialCard | null> {
 		`https://www.pokemon-card.com/card-search/details.php/card/${cardId}/regu/all`,
 		`${CACHE}/official-${cardId}.html`
 	)
-	const col = raw.match(/&nbsp;(\d{3})&nbsp;\/&nbsp;(\d{3})&nbsp;/)
+	// promos count against the series string instead of a total (001/M-P)
+	const col = raw.match(/&nbsp;(\d{3})&nbsp;\/&nbsp;([A-Z0-9-]{1,7})&nbsp;/)
 	if (!col) return null
 	const name = raw.match(/<h1 class="Heading1[^"]*">([^<]+)<\/h1>/)
 	const dex = raw.match(/<h4>No\.(\d+)/)
@@ -308,7 +311,7 @@ async function scrapeEnergies(cfg: SetConfig): Promise<Record<string, { name: st
 	const out: Record<string, { name: string, regulationMark: string | null }> = {}
 	for (const letter of Object.keys(cfg.energies ?? {})) {
 		const html = await fetchCached(
-			`https://limitlesstcg.com/cards/jp/${cfg.setId}/${letter}`,
+			`https://limitlesstcg.com/cards/jp/${LL}/${letter}`,
 			`${CACHE}/limitless-${letter}.html`
 		)
 		const title = html.match(/<span class="card-text-name"><a[^>]*>([^<]+)<\/a><\/span>/)
@@ -389,6 +392,7 @@ for (const n of limitlessNums) {
 	const card = await limitlessCard(n, rarities.get(n))
 	// limitless lists some sets without rarities — cardmarket's label fills in (config.ts)
 	if (!card.rarity && config.rarityOverrides?.[String(n)]) card.rarity = config.rarityOverrides[String(n)]
+	if (!card.rarity && config.promo === true) card.rarity = 'Promo' // cf. data/…/SVP Black Star Promos
 	cards[String(n)] = card
 	if (n % 20 === 0) console.log(`limitless ${n}/${limitlessNums.length}`)
 }
@@ -396,6 +400,7 @@ for (const n of limitlessNums) {
 const ids = await officialCardIds()
 console.log(`official database: ${ids.length} card ids`)
 const problems: string[] = []
+const noMark: number[] = []
 // illustrators per collection number — the source generate.ts uses for secret rares
 const officialIllustrators: Record<string, string> = {}
 for (const id of ids) {
@@ -410,7 +415,7 @@ for (const id of ids) {
 	if (o.name && squash(o.name) !== squash(c.name)) problems.push(`${o.num}: name mismatch limitless=${c.name} official=${o.name}`)
 	c.dexId = o.dexId
 	c.flavor = o.flavor
-	if (o.total !== config.officialCardCount) problems.push(`${o.num}: official total ${o.total} ≠ config ${config.officialCardCount}`)
+	if (config.promo !== true && o.total !== config.officialCardCount) problems.push(`${o.num}: official total ${o.total} ≠ config ${config.officialCardCount}`)
 	if (o.toolClause) {
 		const cc = c as RawCard & { effect?: string }
 		if (!cc.effect) cc.effect = o.toolClause
@@ -459,7 +464,11 @@ for (const c of Object.values(cards)) {
 		problems.push(`${c.num}: incomplete pokemon data`)
 	}
 	if (c.category !== 'Pokemon' && !(c as RawCard & { effect?: string }).effect) problems.push(`${c.num}: missing trainer/energy text`)
-	if (config.regulationMarks !== false && !c.regulationMark) problems.push(`${c.num}: missing regulation mark`)
+	// limitless keeps promo pages only loosely updated — a missing mark is not fatal there
+	if (config.regulationMarks !== false && !c.regulationMark) {
+		if (config.promo === true) noMark.push(c.num)
+		else problems.push(`${c.num}: missing regulation mark`)
+	}
 }
 
 writeFileSync(`${OUT}/cards.json`, JSON.stringify(cards, null, 1))
@@ -471,6 +480,7 @@ writeFileSync(`${OUT}/staple-texts.json`, JSON.stringify(await stapleTexts(confi
 // cards without a rarity become rarity "None" — legitimate for fixed-distribution
 // products (whole deck sets like MC, or the regular cards of subsets like M2a, which
 // cardmarket lists as "Fixed"), but worth a look when unexpected
+if (noMark.length) console.log(`note: limitless lists no regulation mark for: ${noMark.sort((a, b) => a - b).join(', ')}`)
 const noRarity = Object.values(cards).filter((c) => !c.rarity).map((c) => c.num)
 if (noRarity.length && config.rarities !== false) {
 	console.log(`note: ${noRarity.length} cards carry no rarity (become "None"): ${noRarity.sort((a, b) => a - b).join(', ')}`)

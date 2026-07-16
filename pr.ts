@@ -25,8 +25,9 @@ const cards: Record<string, RawCard> = JSON.parse(readFileSync(`${import.meta.di
 
 const energyCount = Object.keys(config.energies ?? {}).length
 const files = readdirSync(dir).filter((f) => f.endsWith('.ts')).sort()
-if (files.length !== config.totalCards + energyCount) {
-	throw new Error(`${dir} has ${files.length} files, expected ${config.totalCards + energyCount}`)
+const expectedFiles = (config.promo === true ? Object.keys(cards).length : config.totalCards) + energyCount
+if (files.length !== expectedFiles) {
+	throw new Error(`${dir} has ${files.length} files, expected ${expectedFiles}`)
 }
 const tsc = Bun.spawnSync(['bunx', 'tsc', '--noEmit', '--ignoreConfig', '--target', 'esnext', '--module', 'esnext',
 	'--moduleResolution', 'bundler', '--skipLibCheck', ...files.map((f) => join('data-asia', serie, setId, f))], { cwd: repo })
@@ -92,7 +93,7 @@ const body = `## What
 
 Adds the complete Japanese set **${setId} ${config.nameJa}${en}**, released ${config.releaseDate}:
 
-${setFileGenerated ? `- \`data-asia/${serie}/${setId}.ts\` — set definition (${config.officialCardCount} official cards)\n` : ''}- \`data-asia/${serie}/${setId}/${pad(1)}.ts\` … \`${pad(config.totalCards)}.ts\` — all ${config.totalCards} cards${secretText}
+${setFileGenerated ? `- \`data-asia/${serie}/${setId}.ts\` — set definition (${config.officialCardCount} official cards)\n` : ''}- \`data-asia/${serie}/${setId}/${pad(1)}.ts\` … \`${pad(config.totalCards)}.ts\` — ${config.promo === true ? `the ${Object.keys(cards).length} promos published so far (numbering has gaps)` : `all ${config.totalCards} cards${secretText}`}
 ${energyCount ? `- ${Object.keys(config.energies!).map((l) => `\`${ENERGY_CODES[l].code}.ts\``).join(', ')} — the deck's ${energyCount} basic energies (letter-coded, like data-asia/S/SI)\n` : ''}${setFileGenerated ? '' : `- the set definition \`data-asia/${serie}/${setId}.ts\` already existed and is untouched\n`}
 ## Data sources
 

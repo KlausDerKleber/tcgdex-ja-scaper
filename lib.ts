@@ -82,9 +82,13 @@ export interface SetConfig {
 	rarityOverrides?: Record<string, string>
 	/** resistance value of the set's era when the source omits it (default: "-30"; XY era: "-20") */
 	resistanceValue?: string
-	officialProductId: number
+	officialProductId: number | string
 	officialCardCount: number
 	totalCards: number
+	/** ongoing promo series (M-P …): gapped, growing numbering; no secrets */
+	promo?: boolean
+	/** limitless set code when it differs from the tcgdex id (M-P is MP there) */
+	limitlessId?: string
 	/** serebii.net set slug, needed only when `secrets` is present (illustrators of secret rares) */
 	serebiiSlug?: string
 	/** dexIds the official pages do not print (ex/Mega cards); base species name → national dex id */
