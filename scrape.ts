@@ -387,7 +387,6 @@ for (const c of Object.values(cards)) {
 		problems.push(`${c.num}: incomplete pokemon data`)
 	}
 	if (c.category !== 'Pokemon' && !(c as RawCard & { effect?: string }).effect) problems.push(`${c.num}: missing trainer/energy text`)
-	if (config.rarities !== false && !c.rarity) problems.push(`${c.num}: missing rarity`)
 	if (config.regulationMarks !== false && !c.regulationMark) problems.push(`${c.num}: missing regulation mark`)
 }
 
@@ -395,6 +394,14 @@ writeFileSync(`${OUT}/cards.json`, JSON.stringify(cards, null, 1))
 writeFileSync(`${OUT}/energies.json`, JSON.stringify(await scrapeEnergies(config), null, 1))
 writeFileSync(`${OUT}/serebii-illustrators.json`, JSON.stringify(await serebiiIllustrators(config), null, 1))
 writeFileSync(`${OUT}/staple-texts.json`, JSON.stringify(await stapleTexts(config), null, 1))
+
+// cards without a rarity become rarity "None" — legitimate for fixed-distribution
+// products (whole deck sets like MC, or the regular cards of subsets like M2a, which
+// cardmarket lists as "Fixed"), but worth a look when unexpected
+const noRarity = Object.values(cards).filter((c) => !c.rarity).map((c) => c.num)
+if (noRarity.length && config.rarities !== false) {
+	console.log(`note: ${noRarity.length} cards carry no rarity (become "None"): ${noRarity.sort((a, b) => a - b).join(', ')}`)
+}
 
 console.log(`\n${Object.keys(cards).length} cards written to out/${setId}/cards.json`)
 if (problems.length) {

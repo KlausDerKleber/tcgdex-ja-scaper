@@ -306,6 +306,55 @@ if (numbers[0] !== 1 || numbers[numbers.length - 1] !== llCount) {
 	throw new Error(`limitless numbering is not contiguous 1..${llCount} — extend config.ts`)
 }
 
+// ---------- number assignment helpers ----------
+
+let probeCount = 0
+/** collection number of one specific product: search pokepricelab server-side for the
+ * product's name — the returned rows carry number + cardmarket id, so the id pins it */
+async function probeNumber(setSlug: string, p: { idProduct: number, name: string }): Promise<number> {
+	const q = p.name.replace(/\s*\[.*$/, '').trim()
+	const html = await fetchCached(
+		`https://pokepricelab.com/catalog?q=${encodeURIComponent(q)}&set=${setSlug}`,
+		`${BOOT}/probe-${p.idProduct}.html`
+	)
+	probeCount += 1
+	for (const m of html.matchAll(/\\"card_number\\":\\"(\d+)\\",\\"cardmarket_id\\":(\d+)/g)) {
+		if (parseInt(m[2], 10) === p.idProduct) return parseInt(m[1], 10)
+	}
+	throw new Error(`probe failed: pokepricelab search "${q}" in ${setSlug} does not list product ${p.idProduct}`)
+}
+
+/** number per id-sorted product. Usually the sorted order IS the collection order, but
+ * cardmarket occasionally creates a product late (M2a: card 016 got the set's last id) —
+ * anchors from the sample rows plus targeted probes repair such relocations. */
+async function assignNumbers(items: { idProduct: number, name: string }[], anchors: Map<number, number>, setSlug: string): Promise<Map<number, number>> {
+	const nums = new Array<number | null>(items.length).fill(null)
+	items.forEach((p, i) => { const a = anchors.get(p.idProduct); if (a != null) nums[i] = a })
+	const num = async (i: number): Promise<number> => nums[i] ?? (nums[i] = await probeNumber(setSlug, items[i]))
+	await num(0)
+	await num(items.length - 1)
+	const fill = async (lo: number, hi: number): Promise<void> => {
+		if (nums[hi]! - nums[lo]! === hi - lo) {
+			for (let i = lo + 1; i < hi; i++) {
+				if (nums[i] != null && nums[i] !== nums[lo]! + (i - lo)) throw new Error(`anchor contradicts uniform range at position ${i + 1}`)
+				nums[i] = nums[lo]! + (i - lo)
+			}
+			return
+		}
+		if (hi - lo <= 1) return // adjacent, numbers just skip here (relocated or absent numbers)
+		const mid = (lo + hi) >> 1
+		await num(mid)
+		await fill(lo, mid)
+		await fill(mid, hi)
+	}
+	const known = [...new Set([0, ...nums.map((n, i) => (n != null ? i : -1)).filter((i) => i >= 0), items.length - 1])].sort((a, b) => a - b)
+	for (let k = 0; k + 1 < known.length; k++) await fill(known[k], known[k + 1])
+	const out = new Map<number, number>()
+	items.forEach((p, i) => out.set(p.idProduct, nums[i]!))
+	if (out.size !== items.length || new Set(out.values()).size !== items.length) throw new Error('number assignment is incomplete or has duplicates')
+	return out
+}
+
 // deck products list the deck's basic energies as cardmarket products while limitless
 // numbers only the real cards (they become letter-coded cards like MC G) — exclude them
 // when that makes the counts meet; the sample verification backstops the decision
@@ -332,19 +381,76 @@ const cardmarketIds: Record<string, number> = {}
 let totalCards = llCount
 if (numbered.length >= llCount) {
 	totalCards = numbered.length
-	numbered.forEach((p, i) => { cardmarketIds[String(i + 1)] = p.idProduct })
-	for (const s of samples) {
-		if (cardmarketIds[String(s.num)] !== s.cardmarket) {
-			throw new Error(`cardmarket id order broken at card ${s.num}: catalog order says ${cardmarketIds[String(s.num)]}, pokepricelab says ${s.cardmarket} — wrong set match or non-sequential expansion`)
+	const ordered = samples.every((s) => numbered[s.num - 1]?.idProduct === s.cardmarket)
+	if (ordered) {
+		numbered.forEach((p, i) => { cardmarketIds[String(i + 1)] = p.idProduct })
+	} else {
+		// the plain id order disagrees with the samples — repair via probes
+		const assigned = await assignNumbers(numbered, new Map(samples.map((s) => [s.cardmarket, s.num])), slug)
+		const sorted = [...assigned.values()].sort((a, b) => a - b)
+		if (sorted[0] !== 1 || sorted[sorted.length - 1] !== numbered.length) {
+			throw new Error(`repaired numbering does not cover 1..${numbered.length}`)
 		}
+		for (const [id, n] of assigned) cardmarketIds[String(n)] = id
 	}
-	console.log(`cardmarket ids: ${numbered.length} (expansion ${sampleProduct.idExpansion}, verified against ${samples.length} pokepricelab samples)`)
+	console.log(`cardmarket ids: ${numbered.length} (expansion ${sampleProduct.idExpansion}, verified against ${samples.length} pokepricelab samples${probeCount ? `, order repaired with ${probeCount} probes` : ''})`)
 	if (numbered.length > llCount) {
 		console.log(`note: cards ${llCount + 1}–${numbered.length} are not on limitless yet — add them to "secrets" in the config (see M5.config.json)`)
 	}
 } else {
 	console.log(`WARNING: cardmarket expansion ${sampleProduct.idExpansion} has only ${numbered.length} usable products for ${llCount} cards — cardmarketIds left empty; fill them by hand or delete ${CM_CACHE} to refresh`)
 	for (const p of numbered) console.log(`  ${p.idProduct} ${p.name}`)
+}
+
+// ---------- reverse variants („…-additionals" listings on pokepricelab) ----------
+
+// mirror-pattern reprints of the regular cards live in a separate "<slug>-additionals"
+// pokepricelab set backed by its own cardmarket expansion; each card has two adjacent
+// products there — energy pattern first, ball pattern second (cf. the English prints,
+// verified via M2a Togepi 861628/861629)
+const reverses: Record<string, { name: string, ids: [number, number] }> = {}
+const addSlug = `${slug}-additionals`
+let addHtml: string | null = null
+try {
+	const addBoot = `${import.meta.dir}/out/.bootstrap/${addSlug}`
+	mkdirSync(addBoot, { recursive: true })
+	addHtml = await fetchCached(`https://pokepricelab.com/catalog?set=${addSlug}`, `${addBoot}/ppl-catalog.html`)
+} catch {
+	console.log('no additionals listing')
+}
+if (addHtml) {
+	const addSamples = parsePplRows(addHtml)
+	if (addSamples.length && addSamples.some((s) => s.languages.includes('JA')) && !addSamples.some((s) => s.languages.includes('EN'))) {
+		const anchor = catalog.products.find((p) => p.idProduct === addSamples[0].cardmarket)
+		if (!anchor) throw new Error(`cardmarket catalog has no product ${addSamples[0].cardmarket} — delete ${CM_CACHE} to refresh`)
+		const addExp = catalog.products.filter((p) => p.idExpansion === anchor.idExpansion).sort((a, b) => a.idProduct - b.idProduct)
+		if (addExp.length % 2) throw new Error(`additionals expansion ${anchor.idExpansion} has an odd product count (${addExp.length})`)
+		const idToNum = new Map(Object.entries(cardmarketIds).map(([n, id]) => [id, parseInt(n, 10)]))
+		const byName = new Map<string, number[]>()
+		for (const p of numbered) {
+			const n = idToNum.get(p.idProduct)
+			if (n != null) byName.set(p.name, [...(byName.get(p.name) ?? []), n])
+		}
+		let prev = 0
+		for (let i = 0; i < addExp.length; i += 2) {
+			if (addExp[i].name !== addExp[i + 1].name) throw new Error(`additionals products ${addExp[i].idProduct}/${addExp[i + 1].idProduct} are not a name pair`)
+			// the pair belongs to the main-set card of the same product name (regular range,
+			// ascending along the pair sequence); ambiguity is settled by a probe
+			const cand = (byName.get(addExp[i].name) ?? []).filter((n) => n <= officialCardCount! && n > prev)
+			const n = cand.length === 1 ? cand[0] : await probeNumber(addSlug, addExp[i])
+			if (n <= prev) throw new Error(`additionals pair ${addExp[i].idProduct}: number ${n} breaks the ascending order`)
+			reverses[String(n)] = { name: addExp[i].name.replace(/\s*\[.*$/, '').trim(), ids: [addExp[i].idProduct, addExp[i + 1].idProduct] }
+			prev = n
+		}
+		for (const s of addSamples) {
+			const hit = Object.entries(reverses).find(([, r]) => r.ids.includes(s.cardmarket))
+			if (!hit || parseInt(hit[0], 10) !== s.num) {
+				throw new Error(`additionals sample ${s.num}→${s.cardmarket} contradicts the pair mapping`)
+			}
+		}
+		console.log(`reverse variants: ${Object.keys(reverses).length} cards × 2 patterns (expansion ${anchor.idExpansion}, verified against ${addSamples.length} samples)`)
+		console.log('note: set "enSet" in the config (e.g. "Mega Evolution/Ascended Heroes") so the ball foils come from the English prints')
+	}
 }
 
 // ---------- serie (existing set stub in the repo, else longest matching serie dir) ----------
@@ -384,6 +490,7 @@ const config: Record<string, unknown> = {
 	manualDex: {},
 	cardmarketIds,
 	...(Object.keys(energies).length ? { energies } : {}),
+	...(Object.keys(reverses).length ? { reverses } : {}),
 }
 const path = `${import.meta.dir}/configs/${set.id}.config.json`
 if (existsSync(path) && !force) {

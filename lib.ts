@@ -83,6 +83,12 @@ export interface SetConfig {
 	cardmarketIds: Record<string, number>
 	/** unnumbered basic energies of deck products: limitless letter → cardmarket product id */
 	energies?: Record<string, number>
+	/** mirror-pattern reverse prints: number → cardmarket ids [energy pattern, ball pattern]
+	 * plus the bracket-less cardmarket name (matches the English card for the ball foil) */
+	reverses?: Record<string, { name: string, ids: [number, number] }>
+	/** English print of the set under data/ (e.g. "Mega Evolution/Ascended Heroes") —
+	 * source of the per-card ball foil of the reverse prints */
+	enSet?: string
 	/** secret rares not listed by the machine-readable sources; number → origin */
 	secrets?: Record<string, SecretEntry>
 }

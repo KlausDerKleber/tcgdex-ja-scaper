@@ -81,6 +81,8 @@ notes.push(`Follows the file format and conventions of the M-era sets (#1728)`)
 if (config.regulationMarks === false) notes.push(`No \`regulationMark\` (the set predates regulation marks)${config.resistanceValue ? `; resistances are \`${config.resistanceValue}\` per the era` : ''}`)
 if (config.rarities === false) notes.push(`The product's cards carry no rarity — they use \`rarity: "None"\` and plain variants, like data-asia/VS/VS1`)
 if (toolAttacks.length) notes.push(`${toolAttacks.map((c) => pad(c.num)).join('/')} ${toolAttacks.length === 1 ? 'is a Pokémon Tool' : 'are Pokémon Tools'} that grant an attack — modeled as \`effect\` + \`attacks\`, like their English prints`)
+const reverseCount = Object.keys(config.reverses ?? {}).length
+if (reverseCount) notes.push(`${reverseCount} regular cards additionally exist as two mirror prints, modeled as \`reverse\` variants with their own cardmarket ids — \`foil: "energy"\` plus a ball foil per card${config.enSet ? ` (taken from the English print, \`data/${config.enSet}\`)` : ''}`)
 notes.push(`All ${files.length} files type-check against \`interfaces.d.ts\` (\`tsc --noEmit\`)`)
 
 const body = `## What

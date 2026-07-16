@@ -112,20 +112,61 @@ function langBlock(value: string, indent = '\t'): string {
 	return `{\n${indent}\tja: "${esc(value)}",\n${indent}}`
 }
 
+// ---------- ball foils of the reverse prints, from the English set (config.enSet) ----------
+
+let enBalls: Map<string, string> | null | undefined
+const missingFoils: string[] = []
+
+/** English card name / #dexId → the card's ball foil (its non-energy reverse foil) */
+function buildEnBallIndex(): Map<string, string> | null {
+	if (!config.enSet) return null
+	const dir = join(repo, 'data', config.enSet)
+	if (!existsSync(dir)) throw new Error(`enSet "${config.enSet}" not found under ${join(repo, 'data')}`)
+	const index = new Map<string, string>()
+	for (const file of readdirSync(dir).filter((f) => f.endsWith('.ts')).sort()) {
+		const src = readFileSync(join(dir, file), 'utf-8')
+		const ball = [...src.matchAll(/foil: "([a-z-]+)"/g)].map((m) => m[1]).find((f) => f !== 'energy')
+		if (!ball) continue
+		const nm = src.match(/name:\s*\{\s*en:\s*"([^"]+)"/)
+		const dx = src.match(/dexId:\s*\[\s*(\d+)/)
+		if (nm && !index.has(nm[1].toLowerCase())) index.set(nm[1].toLowerCase(), ball)
+		if (dx && !index.has(`#${dx[1]}`)) index.set(`#${dx[1]}`, ball)
+	}
+	return index
+}
+
+function ballFoil(c: RawCard, cardmarketName: string): string | null {
+	if (enBalls === undefined) enBalls = buildEnBallIndex()
+	const ball = enBalls?.get(cardmarketName.toLowerCase())
+		?? (c.dexId != null ? enBalls?.get(`#${c.dexId}`) : undefined)
+	if (!ball) missingFoils.push(`${String(c.num).padStart(3, '0')} ${c.name} (${cardmarketName})`)
+	return ball ?? null
+}
+
 /** cardmarket/tcgplayer ids now live on the variant objects (see data/Scarlet & Violet). */
 function pushVariants(L: string[], c: RawCard, variant: string): void {
 	const cm = config.cardmarketIds[String(c.num)]
-	if (cm == null) {
+	const rev = config.reverses?.[String(c.num)]
+	if (cm == null && !rev) {
 		L.push(`\tvariants: [{ type: "${variant}" }],`)
 		return
 	}
+	const entry = (type: string, foil: string | null, id: number) => {
+		L.push('\t\t{')
+		L.push(`\t\t\ttype: "${type}",`)
+		if (foil) L.push(`\t\t\tfoil: "${foil}",`)
+		L.push('\t\t\tthirdParty: {')
+		L.push(`\t\t\t\tcardmarket: ${id},`)
+		L.push('\t\t\t},')
+		L.push('\t\t},')
+	}
 	L.push('\tvariants: [')
-	L.push('\t\t{')
-	L.push(`\t\t\ttype: "${variant}",`)
-	L.push('\t\t\tthirdParty: {')
-	L.push(`\t\t\t\tcardmarket: ${cm},`)
-	L.push('\t\t\t},')
-	L.push('\t\t},')
+	if (cm != null) entry(variant, null, cm)
+	if (rev) {
+		// two mirror prints per card: energy pattern first, ball pattern second
+		entry('reverse', 'energy', rev.ids[0])
+		entry('reverse', ballFoil(c, rev.name), rev.ids[1])
+	}
 	L.push('\t],')
 }
 
@@ -250,6 +291,10 @@ if (failures.length) {
 	console.error(`${failures.length} cards failed:`)
 	for (const f of failures) console.error(' -', f)
 	process.exit(1)
+}
+if (missingFoils.length) {
+	console.log(`${missingFoils.length} reverse prints without a ball foil (${config.enSet ? 'no match in enSet' : 'set "enSet" in the config'}):`)
+	for (const m of missingFoils) console.log(' -', m)
 }
 
 // unnumbered basic energies of deck products — letter-coded files (cf. data-asia/S/SI)
