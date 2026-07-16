@@ -57,6 +57,7 @@ for (const [ns, info] of Object.entries(config.secrets ?? {})) {
 	} else if (info.from) {
 		// scraped in full from the original print's page (scrape.ts)
 		if (!cards[ns]) throw new Error(`secret ${n}: import from ${info.from.set}/${info.from.number} missing — re-run scrape.ts`)
+		if (!cards[ns].illustrator) cards[ns].illustrator = illustrator
 		if (!cards[ns].illustrator) secretsWithoutArtist.push(n)
 	} else if (info.staple) {
 		const effect = stapleTexts[info.staple.nameJa]

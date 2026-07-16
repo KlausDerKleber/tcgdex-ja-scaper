@@ -321,6 +321,7 @@ async function serebiiIllustrators(cfg: SetConfig): Promise<Record<string, strin
 	const out: Record<string, string> = {}
 	if (!cfg.secrets || !cfg.serebiiSlug) return out
 	for (const numStr of Object.keys(cfg.secrets)) {
+		if (cfg.secrets[numStr].energy) continue // energy cards carry no illustrator
 		const n = String(numStr).padStart(3, '0')
 		const html = await fetchCached(
 			`https://www.serebii.net/card/${cfg.serebiiSlug}/${n}.shtml`,

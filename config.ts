@@ -623,6 +623,26 @@ if (totalCards > llCount) {
 	}
 }
 
+// serebii carries the secret-rare illustrators — its set slug is usually the squashed
+// English name (Tag All Stars → tagallstars), verified against a real secret's page
+let serebiiSlug: string | null = null
+{
+	const nonEnergy = Object.keys(secrets).filter((n) => !secrets[n].energy)
+	if (nonEnergy.length) {
+		const cand = set.name.toLowerCase().replace(/[^a-z0-9]/g, '')
+		try {
+			await fetchCached(
+				`https://www.serebii.net/card/${cand}/${nonEnergy[0].padStart(3, '0')}.shtml`,
+				`${BOOT}/serebii-check.html`
+			)
+			serebiiSlug = cand
+			console.log(`serebii slug: ${cand}`)
+		} catch {
+			console.log(`note: serebii slug "${cand}" does not resolve — set serebiiSlug by hand for secret illustrators`)
+		}
+	}
+}
+
 // ---------- reverse variants („…-additionals" listings on pokepricelab) ----------
 
 // mirror-pattern reprints of the regular cards live in a separate "<slug>-additionals"
@@ -680,8 +700,10 @@ const config: Record<string, unknown> = {
 	setId: set.id,
 	nameJa,
 	nameEn: set.name,
+	pplSlug: slug,
 	releaseDate,
 	serie,
+	...(serebiiSlug ? { serebiiSlug } : {}),
 	...(regulationMarks ? {} : { regulationMarks: false }),
 	...(rarityless ? { rarities: false } : {}),
 	...(resistanceValue && resistanceValue !== '-30' ? { resistanceValue } : {}),

@@ -9,7 +9,7 @@
 //
 // Cards limitless does not list yet (fresh secret rares) are reported, not fatal.
 
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { ENERGY_CODES, UA, fetchCached, loadConfig } from './lib'
 
 const setId = process.argv[2]
@@ -66,5 +66,71 @@ const symbol = listHtml.match(/<img class="set"[^>]*src="([^"]+)"/)
 if (!symbol) throw new Error('no set symbol on the limitless list page')
 if (await download(symbol[1], `${DIR}/symbol.png`)) fresh += 1
 
+// ---------- fallbacks for cards limitless has no scan of (fresh secret rares) ----------
+// 1) the official database's large scans (748×1044), 2) pokepricelab's CDN thumbnails
+// (255×361, last resort); non-png sources are converted via sips where available
+
+const pad = (n: number) => String(n).padStart(3, '0')
+
+function toPng(src: string, dest: string): boolean {
+	const r = Bun.spawnSync(['sips', '-s', 'format', 'png', src, '--out', dest], { stdout: 'ignore', stderr: 'ignore' })
+	if (r.exitCode !== 0) return false
+	unlinkSync(src)
+	return true
+}
+
+async function fetchFallback(url: string, n: number, ext: string): Promise<boolean> {
+	const png = `${DIR}/${pad(n)}.png`
+	const raw = `${DIR}/${pad(n)}.${ext}`
+	if ([png, raw].some((f) => existsSync(f) && statSync(f).size > 0)) return true
+	try {
+		if (await download(url, raw)) fresh += 1
+	} catch {
+		return false
+	}
+	if (!toPng(raw, png)) console.log(`note: ${pad(n)}.${ext} kept unconverted (sips unavailable/failed)`)
+	return true
+}
+
 const missing = Array.from({ length: config.totalCards }, (_, i) => i + 1).filter((n) => !images.has(n))
-console.log(`images/${setId}: ${images.size} cards${energyImages.size ? ` + ${energyImages.size} energies` : ''} + symbol (${fresh} new)${missing.length ? ` — limitless has no scans yet for: ${missing.join(', ')}` : ''}`)
+const CACHE_DIR = `${import.meta.dir}/out/${setId}/cache`
+let official = 0
+let ppl = 0
+if (missing.length && existsSync(CACHE_DIR)) {
+	// official large scans, mapped via the cached search listing + card pages
+	const thumbs = new Map<number, string>()
+	for (const f of readdirSync(CACHE_DIR).filter((x) => /^official-api-\d+\.json$/.test(x))) {
+		const d = JSON.parse(readFileSync(`${CACHE_DIR}/${f}`, 'utf-8')) as { cardList?: { cardID: string, cardThumbFile?: string }[] }
+		for (const c of d.cardList ?? []) {
+			const page = `${CACHE_DIR}/official-${c.cardID}.html`
+			if (!c.cardThumbFile || !existsSync(page)) continue
+			const col = readFileSync(page, 'utf-8').match(/&nbsp;(\d{3})&nbsp;\/&nbsp;/)
+			if (col && !thumbs.has(parseInt(col[1], 10))) thumbs.set(parseInt(col[1], 10), `https://www.pokemon-card.com${c.cardThumbFile}`)
+		}
+	}
+	for (let i = missing.length - 1; i >= 0; i--) {
+		const url = thumbs.get(missing[i])
+		if (url && await fetchFallback(url, missing[i], 'jpg')) {
+			missing.splice(i, 1)
+			official += 1
+		}
+	}
+	// pokepricelab thumbnails from the probe caches
+	const boot = `${import.meta.dir}/out/.bootstrap/${config.pplSlug ?? ''}`
+	for (let i = missing.length - 1; i >= 0; i--) {
+		const id = config.cardmarketIds[String(missing[i])]
+		const probe = `${boot}/probe-${id}.html`
+		if (id == null || !config.pplSlug || !existsSync(probe)) continue
+		const h = readFileSync(probe, 'utf-8')
+		const at = h.indexOf(`\\"cardmarket_id\\":${id}`)
+		if (at === -1) continue
+		const img = [...h.slice(Math.max(0, at - 2000), at).matchAll(/\\"image_url\\":\\"([^\\"]+)\\"/g)].pop()
+		if (img && await fetchFallback(img[1], missing[i], 'webp')) {
+			missing.splice(i, 1)
+			ppl += 1
+		}
+	}
+}
+
+const sources = [official && `${official} from the official database`, ppl && `${ppl} from pokepricelab`].filter(Boolean).join(', ')
+console.log(`images/${setId}: ${images.size + official + ppl} cards${energyImages.size ? ` + ${energyImages.size} energies` : ''} + symbol (${fresh} new${sources ? `; ${sources}` : ''})${missing.length ? ` — no scan anywhere for: ${missing.join(', ')}` : ''}`)
