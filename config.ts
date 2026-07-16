@@ -149,6 +149,18 @@ function parseLimitlessList(html: string, setId: string): Map<number, string> {
 	return out
 }
 
+/** limitless set list page → collection number → Japanese card name */
+function parseLimitlessNames(html: string, setId: string): Map<number, string> {
+	const out = new Map<number, string>()
+	for (const row of html.matchAll(new RegExp(`<tr[^>]*data-hover="[^"]*/tpc/${setId}/[^"]*"[^>]*>([\\s\\S]*?)</tr>`, 'g'))) {
+		const links = [...row[1].matchAll(new RegExp(`<a href="/cards/jp/${setId}/(\\d+)">([^<]+)</a>`, 'g'))]
+		if (!links.length) continue
+		const name = links.map((m) => clean(m[2])).sort((a, b) => b.length - a.length)[0]
+		out.set(parseInt(links[0][1], 10), name)
+	}
+	return out
+}
+
 const setsHtml = await fetchCached('https://limitlesstcg.com/cards/jp', `${BOOT}/limitless-sets.html`)
 const allSets = parseLimitlessSets(setsHtml)
 if (!allSets.length) throw new Error('could not parse the limitless set index')
@@ -223,13 +235,16 @@ const search = JSON.parse(await fetchCached(
 	`${CACHE}/official-search-${String(firstNum).padStart(3, '0')}.json`
 )) as { cardList: { cardID: string, cardNameViewText: string }[] }
 
-// the official pages write the set name with an ideographic space — compare NFKC-normalized
-const hasSetName = (s: string) => s.normalize('NFKC').includes(nameJa.normalize('NFKC'))
+// the official pages write set names with ideographic/extra spaces (TAG TEAM GX タッグ…
+// vs the tooltip's TAG TEAM GXタッグ…) — compare NFKC-normalized and space-free
+const squash = (s: string) => s.normalize('NFKC').replace(/\s+/g, '')
+const hasSetName = (s: string) => squash(s).includes(squash(nameJa))
 
 let pg: number | null = null
 let officialCardCount: number | null = null
 let detailsPage: string | null = null
-for (const hit of search.cardList.filter((c) => c.cardNameViewText === name001)) {
+// cardNameViewText comes back HTML-encoded (フェローチェ&amp;マッシブーンGX) — clean() decodes
+for (const hit of search.cardList.filter((c) => clean(c.cardNameViewText) === name001)) {
 	const page = await fetchCached(
 		`https://www.pokemon-card.com/card-search/details.php/card/${hit.cardID}/regu/all`,
 		`${CACHE}/official-${hit.cardID}.html`
@@ -253,20 +268,21 @@ const pgEntries = [...searchPage.matchAll(/\{ name: "pg", value: "(\d+)"[^}]*lab
 		const label = m[2].normalize('NFKC')
 		const bracket = label.match(/「([^」]+)」/)
 		// deck products carry no 「…」 around the name — then the whole label must match
-		return (bracket ? bracket[1] : label).replace(/\([^)]*\)$/, '').trim() === nameJa.normalize('NFKC')
+		return squash((bracket ? bracket[1] : label).replace(/\([^)]*\)$/, '')) === squash(nameJa)
 	})
 if (pgEntries.length === 1) {
 	pg = parseInt(pgEntries[0][1], 10)
 } else if (pgEntries.length > 1) {
 	throw new Error(`several official products match 「${nameJa}」: ${pgEntries.map((m) => `${m[1]} (${m[2]})`).join('; ')}`)
 } else {
-	// older sets: the card details page links its product page, which links the card list
-	const product = detailsPage.match(/href="(\/products\/[^"]+\.html)"/)
-	if (!product) throw new Error(`could not derive the official pg id for 「${nameJa}」 — neither in the card-search product list nor via a product page link`)
+	// older sets link their product page (…/products/xy/cp1.html) or their expansion
+	// mini-site (/ex/sm12a) from the card details page — both carry the card list link
+	const product = detailsPage.match(/href="(\/products\/[^"]+\.html)"/) ?? detailsPage.match(/href="(\/ex\/[a-z0-9-]+)\/?"/)
+	if (!product) throw new Error(`could not derive the official pg id for 「${nameJa}」 — neither in the card-search product list nor via a product/ex page link`)
 	const productHtml = await fetchCached(`https://www.pokemon-card.com${product[1]}`, `${CACHE}/official-product.html`)
-	const pgm = productHtml.match(/card-search\/index\.php\?mode=statuslist&pg=(\d+)/)
-	if (!pgm) throw new Error(`product page ${product[1]} has no card list link`)
-	pg = parseInt(pgm[1], 10)
+	const pgs = [...new Set([...productHtml.matchAll(/[?&]pg=(\d+)/g)].map((m) => m[1]))]
+	if (pgs.length !== 1) throw new Error(`${product[1]} links ${pgs.length} different pg ids (${pgs.join(', ')})`)
+	pg = parseInt(pgs[0], 10)
 }
 
 // sanity: the pg listing covers at least the printed main set; secret rares and (for
@@ -310,8 +326,9 @@ if (numbers[0] !== 1 || numbers[numbers.length - 1] !== llCount) {
 
 let probeCount = 0
 /** collection number of one specific product: search pokepricelab server-side for the
- * product's name — the returned rows carry number + cardmarket id, so the id pins it */
-async function probeNumber(setSlug: string, p: { idProduct: number, name: string }): Promise<number> {
+ * product's name — the returned rows carry number + cardmarket id, so the id pins it.
+ * null when pokepricelab does not list the product (e.g. the basic energies of SM12a). */
+async function probeNumber(setSlug: string, p: { idProduct: number, name: string }): Promise<number | null> {
 	const q = p.name.replace(/\s*\[.*$/, '').trim()
 	const html = await fetchCached(
 		`https://pokepricelab.com/catalog?q=${encodeURIComponent(q)}&set=${setSlug}`,
@@ -321,18 +338,28 @@ async function probeNumber(setSlug: string, p: { idProduct: number, name: string
 	for (const m of html.matchAll(/\\"card_number\\":\\"(\d+)\\",\\"cardmarket_id\\":(\d+)/g)) {
 		if (parseInt(m[2], 10) === p.idProduct) return parseInt(m[1], 10)
 	}
-	throw new Error(`probe failed: pokepricelab search "${q}" in ${setSlug} does not list product ${p.idProduct}`)
+	return null
 }
 
 /** number per id-sorted product. Usually the sorted order IS the collection order, but
- * cardmarket occasionally creates a product late (M2a: card 016 got the set's last id) —
- * anchors from the sample rows plus targeted probes repair such relocations. */
-async function assignNumbers(items: { idProduct: number, name: string }[], anchors: Map<number, number>, setSlug: string): Promise<Map<number, number>> {
+ * cardmarket occasionally creates products late (M2a: card 016 got the set's last id;
+ * SM12a: the nine numbered basic energies) — anchors from the sample rows plus targeted
+ * probes repair relocations; products pokepricelab does not list are assigned by
+ * elimination (remaining ids ↔ remaining numbers, both ascending) and reported. */
+async function assignNumbers(items: { idProduct: number, name: string }[], anchors: Map<number, number>, setSlug: string, jpNames: Map<number, string>): Promise<Map<number, number>> {
 	const nums = new Array<number | null>(items.length).fill(null)
+	const unprobeable = new Set<number>()
 	items.forEach((p, i) => { const a = anchors.get(p.idProduct); if (a != null) nums[i] = a })
-	const num = async (i: number): Promise<number> => nums[i] ?? (nums[i] = await probeNumber(setSlug, items[i]))
-	await num(0)
-	await num(items.length - 1)
+	const num = async (i: number): Promise<number | null> => {
+		if (nums[i] != null || unprobeable.has(i)) return nums[i]
+		const n = await probeNumber(setSlug, items[i])
+		if (n == null) unprobeable.add(i)
+		else nums[i] = n
+		return n
+	}
+	// a probeable anchor near each end
+	for (let i = 0; i < items.length && (await num(i)) == null; i++);
+	for (let i = items.length - 1; i >= 0 && (await num(i)) == null; i--);
 	const fill = async (lo: number, hi: number): Promise<void> => {
 		if (nums[hi]! - nums[lo]! === hi - lo) {
 			for (let i = lo + 1; i < hi; i++) {
@@ -343,15 +370,50 @@ async function assignNumbers(items: { idProduct: number, name: string }[], ancho
 		}
 		if (hi - lo <= 1) return // adjacent, numbers just skip here (relocated or absent numbers)
 		const mid = (lo + hi) >> 1
-		await num(mid)
-		await fill(lo, mid)
-		await fill(mid, hi)
+		// probe the middle; when pokepricelab does not list it, try its neighbours
+		for (let step = 0; mid - step > lo || mid + step < hi; step++) {
+			if (mid - step > lo && (await num(mid - step)) != null) break
+			if (step && mid + step < hi && (await num(mid + step)) != null) break
+		}
+		const inner = nums.map((n, i) => (n != null && i > lo && i < hi ? i : -1)).filter((i) => i >= 0)
+		if (!inner.length) return // nothing probeable inside — the whole segment goes to elimination
+		let prev = lo
+		for (const i of [...inner, hi]) {
+			await fill(prev, i)
+			prev = i
+		}
 	}
-	const known = [...new Set([0, ...nums.map((n, i) => (n != null ? i : -1)).filter((i) => i >= 0), items.length - 1])].sort((a, b) => a - b)
+	const known = nums.map((n, i) => (n != null ? i : -1)).filter((i) => i >= 0)
 	for (let k = 0; k + 1 < known.length; k++) await fill(known[k], known[k + 1])
+	// products pokepricelab cannot see: basic energies are matched via their Japanese
+	// name on the limitless list; the rest by elimination only when it is unambiguous
+	const assigned = new Set(nums.filter((n): n is number => n != null))
+	if (assigned.size !== nums.filter((n) => n != null).length) throw new Error('number assignment has duplicates')
+	let open = nums.map((n, i) => (n == null ? i : -1)).filter((i) => i >= 0)
+	if (open.length) {
+		const JP_TYPE: Record<string, string> = { Grass: '草', Fire: '炎', Water: '水', Lightning: '雷', Psychic: '超', Fighting: '闘', Darkness: '悪', Metal: '鋼', Fairy: 'フェアリー' }
+		for (const idx of [...open]) {
+			const m = items[idx].name.match(/^(?:Basic )?(Grass|Fire|Water|Lightning|Psychic|Fighting|Darkness|Metal|Fairy) Energy$/)
+			if (!m) continue
+			const hits = [...jpNames].filter(([n, nm]) => nm === `基本${JP_TYPE[m[1]]}エネルギー` && !assigned.has(n))
+			if (hits.length === 1) {
+				nums[idx] = hits[0][0]
+				assigned.add(hits[0][0])
+			}
+		}
+		open = nums.map((n, i) => (n == null ? i : -1)).filter((i) => i >= 0)
+	}
+	if (open.length) {
+		const maxNum = Math.max(...assigned, items.length)
+		const missing = Array.from({ length: maxNum }, (_, i) => i + 1).filter((n) => !assigned.has(n))
+		if (open.length !== missing.length) {
+			throw new Error(`cannot place ${open.length} unlisted products (${open.map((i) => `${items[i].idProduct} ${items[i].name.slice(0, 30)}`).join('; ')}) onto ${missing.length} free numbers (${missing.join(', ')}) — add them to cardmarketIds by hand`)
+		}
+		open.forEach((idx, k) => { nums[idx] = missing[k] })
+		console.log(`note: ${open.length} products assigned by elimination (not listed on pokepricelab): ${open.map((idx, k) => `${missing[k]}→${items[idx].idProduct} (${items[idx].name.slice(0, 24)})`).join(', ')}`)
+	}
 	const out = new Map<number, number>()
 	items.forEach((p, i) => out.set(p.idProduct, nums[i]!))
-	if (out.size !== items.length || new Set(out.values()).size !== items.length) throw new Error('number assignment is incomplete or has duplicates')
 	return out
 }
 
@@ -361,17 +423,30 @@ async function assignNumbers(items: { idProduct: number, name: string }[], ancho
 let numbered = expansion
 const energies: Record<string, number> = {}
 if (expansion.length !== llCount) {
-	const basics = expansion.filter((p) => /^Basic .+ Energy$/.test(p.name))
+	// cardmarket names them "Basic Grass Energy" (MC) or just "Grass Energy" (SM12a)
+	const basicRe = /^(?:Basic )?(Grass|Fire|Water|Lightning|Psychic|Fighting|Darkness|Metal|Fairy) Energy$/
+	const basics = expansion.filter((p) => basicRe.test(p.name))
 	if (basics.length && expansion.length - basics.length >= llCount) {
-		numbered = expansion.filter((p) => !/^Basic .+ Energy$/.test(p.name))
-		// they become the set's unnumbered letter-coded energy cards (limitless: /cards/jp/<SET>/G)
+		// a basic-energy product can still be a numbered card of the set (SM12a's secret
+		// energies) — pokepricelab lists those with a number, so a probe tells them apart;
+		// the rest are unnumbered letter cards when limitless lists them (/cards/jp/MC/G),
+		// otherwise plain pack inserts outside the set
+		const letterRows = new Set([...listHtml.matchAll(new RegExp(`<a href="/cards/jp/${set.id}/([A-Z])">`, 'g'))].map((m) => m[1]))
+		const inserts = new Set<number>()
 		for (const p of basics) {
-			const type = p.name.match(/^Basic (.+) Energy$/)![1]
+			if ((await probeNumber(slug, p)) != null) continue
+			inserts.add(p.idProduct)
+			const type = p.name.match(basicRe)![1]
 			const letter = Object.keys(ENERGY_CODES).find((l) => ENERGY_CODES[l].type === type)
 			if (!letter) throw new Error(`unknown basic energy type "${type}" (${p.idProduct})`)
-			energies[letter] = p.idProduct
+			if (letterRows.has(letter)) energies[letter] = p.idProduct
 		}
-		console.log(`note: ${basics.length} basic energies kept as letter cards (${Object.entries(energies).map(([l, id]) => `${l}=${id}`).join(', ')})`)
+		numbered = expansion.filter((p) => !inserts.has(p.idProduct))
+		if (Object.keys(energies).length) {
+			console.log(`note: ${Object.keys(energies).length} basic energies kept as letter cards (${Object.entries(energies).map(([l, id]) => `${l}=${id}`).join(', ')})`)
+		}
+		const dropped = inserts.size - Object.keys(energies).length
+		if (dropped) console.log(`note: ${dropped} basic-energy products are pack inserts outside the set's numbering — dropped`)
 	}
 }
 
@@ -386,16 +461,17 @@ if (numbered.length >= llCount) {
 		numbered.forEach((p, i) => { cardmarketIds[String(i + 1)] = p.idProduct })
 	} else {
 		// the plain id order disagrees with the samples — repair via probes
-		const assigned = await assignNumbers(numbered, new Map(samples.map((s) => [s.cardmarket, s.num])), slug)
+		const assigned = await assignNumbers(numbered, new Map(samples.map((s) => [s.cardmarket, s.num])), slug, parseLimitlessNames(listHtml, set.id))
 		const sorted = [...assigned.values()].sort((a, b) => a - b)
-		if (sorted[0] !== 1 || sorted[sorted.length - 1] !== numbered.length) {
-			throw new Error(`repaired numbering does not cover 1..${numbered.length}`)
-		}
+		if (sorted[0] !== 1) throw new Error('repaired numbering does not start at 1')
+		totalCards = Math.max(sorted[sorted.length - 1], llCount)
+		const gaps = Array.from({ length: totalCards }, (_, i) => i + 1).filter((n) => !sorted.includes(n))
+		if (gaps.length) console.log(`note: no cardmarket product for card(s) ${gaps.join(', ')} — their thirdParty stays empty`)
 		for (const [id, n] of assigned) cardmarketIds[String(n)] = id
 	}
 	console.log(`cardmarket ids: ${numbered.length} (expansion ${sampleProduct.idExpansion}, verified against ${samples.length} pokepricelab samples${probeCount ? `, order repaired with ${probeCount} probes` : ''})`)
-	if (numbered.length > llCount) {
-		console.log(`note: cards ${llCount + 1}–${numbered.length} are not on limitless yet — add them to "secrets" in the config (see M5.config.json)`)
+	if (totalCards > llCount) {
+		console.log(`note: cards ${llCount + 1}–${totalCards} are not on limitless yet — add them to "secrets" in the config (see M5.config.json)`)
 	}
 } else {
 	console.log(`WARNING: cardmarket expansion ${sampleProduct.idExpansion} has only ${numbered.length} usable products for ${llCount} cards — cardmarketIds left empty; fill them by hand or delete ${CM_CACHE} to refresh`)

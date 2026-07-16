@@ -83,16 +83,15 @@ function dexKeys(name: string): string[] {
 	const megaStripped = (s: string) => {
 		for (keys.push(s); s.startsWith('メガ'); s = s.slice(2)) keys.push(s.slice(2))
 	}
-	const base = name.replace(/(ex|EX)$/, '').trim()
+	const base = name.replace(/(ex|EX|GX)$/, '').trim()
 	megaStripped(base)
 	if (base.includes('の')) megaStripped(base.slice(base.indexOf('の') + 1))
 	return [...new Set(keys)]
 }
 
 let repoDex: Map<string, number> | null = null
-function resolveDex(c: RawCard): number {
-	if (c.dexId != null) return c.dexId
-	const keys = dexKeys(c.name)
+function resolveOneDex(name: string, c: RawCard): number {
+	const keys = dexKeys(name)
 	for (const k of keys) if (config.manualDex[k] != null) return config.manualDex[k]
 	repoDex ??= buildRepoDexIndex()
 	for (const k of keys) {
@@ -100,6 +99,13 @@ function resolveDex(c: RawCard): number {
 		if (dex != null) return dex
 	}
 	throw new Error(`card ${c.num} (${c.name}): dexId unresolved — add it to manualDex`)
+}
+
+/** all dex ids of a card, print order (TAG TEAM cards name several Pokémon) */
+function resolveDex(c: RawCard): number[] {
+	if (c.dexId != null) return Array.isArray(c.dexId) ? c.dexId : [c.dexId]
+	const parts = c.name.replace(/(ex|EX|GX)$/, '').split(/[&＆]/).map((s) => s.trim()).filter(Boolean)
+	return parts.length > 1 ? parts.map((p) => resolveOneDex(p, c)) : [resolveOneDex(c.name, c)]
 }
 
 // ---------- card file emission (format identical to the existing M-era files) ----------
@@ -242,10 +248,13 @@ function genCard(c: RawCard): string {
 		L.push(`\tretreat: ${c.retreat},`)
 		if (c.regulationMark) L.push(`\tregulationMark: "${c.regulationMark}",`)
 		L.push(`\trarity: "${c.rarity ?? 'None'}",`) // rarity-less products use "None" (cf. data-asia/VS/VS1)
-		L.push(`\tdexId: [${resolveDex(c)}],`)
+		L.push(`\tdexId: [${resolveDex(c).join(', ')}],`)
 		if (c.name.endsWith('ex') || c.name.endsWith('EX')) {
 			L.push('')
 			L.push('\tsuffix: "EX",')
+		} else if (c.name.endsWith('GX')) {
+			L.push('')
+			L.push(`\tsuffix: "${/[&＆]/.test(c.name) ? 'TAG TEAM-GX' : 'GX'}",`)
 		}
 	} else {
 		if (c.category === 'Energy') L.push('\tenergyType: "Special",')

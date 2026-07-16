@@ -45,7 +45,8 @@ export interface RawCard {
 	regulationMark: string | null
 	rarity: string | null
 	flavor: string | null
-	dexId: number | null
+	/** an array for TAG TEAM cards (one entry per named Pokémon, print order) */
+	dexId: number | number[] | null
 	/** trainer/energy rules text */
 	effect?: string
 }

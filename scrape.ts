@@ -246,32 +246,49 @@ function speciesCandidates(name: string): string[] {
 		const regional = s.match(/^(?:アローラ|ガラル|ヒスイ|パルデア)\s*(.+)$/)
 		if (regional) add(regional[1])
 	}
-	add(name.replace(/(ex|EX)$/, ''))
+	add(name.replace(/(ex|EX|GX)$/, ''))
 	for (const s of [...out]) if (/[XY]$/.test(s)) add(s.slice(0, -1)) // mega form letters
 	return out
+}
+
+/** dex id of one species name via the candidate chain, or null */
+async function searchDex(name: string): Promise<number | null> {
+	for (const cand of speciesCandidates(name)) {
+		const raw = await fetchCached(
+			`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=${encodeURIComponent(cand)}&regulation_sidebar_form=all&sm_and_keyword=true`,
+			`${CACHE}/dex-search-${cand}.json`
+		)
+		const d = JSON.parse(raw) as { cardList: { cardID: string, cardNameViewText: string }[] }
+		// cardNameViewText comes back HTML-encoded (フェローチェ&amp;マッシブーンGX) — clean() decodes
+		for (const hit of d.cardList.filter((h) => clean(h.cardNameViewText) === cand).slice(0, 5)) {
+			const page = await fetchCached(
+				`https://www.pokemon-card.com/card-search/details.php/card/${hit.cardID}/regu/all`,
+				`${CACHE}/official-${hit.cardID}.html`
+			)
+			const no = page.match(/<h4>No\.(\d+)/)
+			if (no) return parseInt(no[1], 10)
+		}
+	}
+	return null
 }
 
 async function resolveDexViaOtherPrints(all: Record<string, RawCard>): Promise<void> {
 	for (const c of Object.values(all)) {
 		if (c.category !== 'Pokemon' || c.dexId != null) continue
-		outer: for (const cand of speciesCandidates(c.name)) {
-			const raw = await fetchCached(
-				`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=${encodeURIComponent(cand)}&regulation_sidebar_form=all&sm_and_keyword=true`,
-				`${CACHE}/dex-search-${cand}.json`
-			)
-			const d = JSON.parse(raw) as { cardList: { cardID: string, cardNameViewText: string }[] }
-			for (const hit of d.cardList.filter((h) => h.cardNameViewText === cand).slice(0, 5)) {
-				const page = await fetchCached(
-					`https://www.pokemon-card.com/card-search/details.php/card/${hit.cardID}/regu/all`,
-					`${CACHE}/official-${hit.cardID}.html`
-				)
-				const no = page.match(/<h4>No\.(\d+)/)
-				if (no) {
-					c.dexId = parseInt(no[1], 10)
-					break outer
-				}
+		// TAG TEAM cards name several Pokémon (フェローチェ&マッシブーンGX) — one id each
+		const parts = c.name.replace(/(ex|EX|GX)$/, '').split(/[&＆]/).map((s) => s.trim()).filter(Boolean)
+		if (parts.length > 1) {
+			const ids: number[] = []
+			for (const part of parts) {
+				const dex = await searchDex(part)
+				if (dex == null) { ids.length = 0; break }
+				ids.push(dex)
 			}
+			if (ids.length) c.dexId = ids
+			continue
 		}
+		const dex = await searchDex(c.name)
+		if (dex != null) c.dexId = dex
 	}
 }
 
@@ -323,7 +340,7 @@ async function stapleTexts(cfg: SetConfig): Promise<Record<string, string>> {
 			`${CACHE}/staple-search-${name}.json`
 		)
 		const d = JSON.parse(raw) as { cardList: { cardID: string, cardNameViewText: string }[] }
-		const hits = d.cardList.filter((c) => c.cardNameViewText === name)
+		const hits = d.cardList.filter((c) => clean(c.cardNameViewText) === name)
 		if (!hits.length) throw new Error(`staple ${name}: not found in official database`)
 		const cardId = String(Math.max(...hits.map((c) => parseInt(c.cardID, 10))))
 		const page = await fetchCached(
@@ -362,7 +379,9 @@ for (const id of ids) {
 	if (!o) continue
 	const c = cards[String(o.num)]
 	if (!c) continue
-	if (o.name && o.name !== c.name) problems.push(`${o.num}: name mismatch limitless=${c.name} official=${o.name}`)
+	// the sources disagree on spacing within names (アローラ ロコン vs アローラロコン)
+	const squash = (s: string) => s.normalize('NFKC').replace(/\s+/g, '')
+	if (o.name && squash(o.name) !== squash(c.name)) problems.push(`${o.num}: name mismatch limitless=${c.name} official=${o.name}`)
 	c.dexId = o.dexId
 	c.flavor = o.flavor
 	if (o.total !== config.officialCardCount) problems.push(`${o.num}: official total ${o.total} ≠ config ${config.officialCardCount}`)
