@@ -551,7 +551,15 @@ if (totalCards > llCount) {
 	// era-wide alt arts have no print in the set at all (SM12a): the official database
 	// carries their Japanese name, which finds the original print via the limitless search
 	const officialNames = new Map<number, string>()
-	const findImport = async (n: number): Promise<{ set: string, number: number } | null> => {
+	const firstJpPrint = (html: string): { set: string, number: number } | null => {
+		const prints = [...new Set([...html.matchAll(/\/cards\/jp\/([A-Za-z0-9-]+)\/(\d+)/g)]
+			.map((m) => `${m[1]}/${m[2]}`))]
+			.map((s) => ({ set: s.split('/')[0], number: parseInt(s.split('/')[1], 10) }))
+			.filter((x) => x.set !== set.id)
+			.sort((a, b) => a.set.localeCompare(b.set) || a.number - b.number)
+		return prints[0] ?? null
+	}
+	const findImport = async (n: number, enName: string): Promise<{ set: string, number: number } | null> => {
 		if (!officialNames.size) {
 			let page = 1
 			let maxPage = 1
@@ -577,17 +585,31 @@ if (totalCards > llCount) {
 			}
 		}
 		const nameJp = officialNames.get(n)
-		if (!nameJp) return null
-		const html = await fetchCached(
-			`https://limitlesstcg.com/cards/jp?q=${encodeURIComponent(nameJp)}`,
-			`${BOOT}/ll-search-${n}.html`
+		if (nameJp) {
+			const html = await fetchCached(
+				`https://limitlesstcg.com/cards/jp?q=${encodeURIComponent(nameJp)}`,
+				`${BOOT}/ll-search-${n}.html`
+			)
+			return firstJpPrint(html)
+		}
+		// not in the official database (e.g. gold trainer reprints beyond its range):
+		// the English print's limitless page links the Japanese originals
+		const enSearch = await fetchCached(
+			`https://limitlesstcg.com/cards/en?q=${encodeURIComponent(enName)}`,
+			`${BOOT}/ll-en-search-${n}.html`
 		)
-		const prints = [...new Set([...html.matchAll(/\/cards\/jp\/([A-Za-z0-9-]+)\/(\d+)/g)]
-			.map((m) => `${m[1]}/${m[2]}`))]
-			.map((s) => ({ set: s.split('/')[0], number: parseInt(s.split('/')[1], 10) }))
-			.filter((x) => x.set !== set.id)
-			.sort((a, b) => a.set.localeCompare(b.set) || a.number - b.number)
-		return prints[0] ?? null
+		const enLinks = [...new Set([...enSearch.matchAll(/\/cards\/en\/([A-Za-z0-9-]+)\/(\d+)/g)].map((m) => `${m[1]}/${m[2]}`))]
+		for (const link of enLinks.slice(0, 5)) {
+			const page = await fetchCached(
+				`https://limitlesstcg.com/cards/en/${link}`,
+				`${BOOT}/ll-en-${link.replace('/', '-')}.html`
+			)
+			const title = page.match(/<span class="card-text-name"><a[^>]*>([^<]+)<\/a><\/span>/)
+			if (!title || clean(title[1]).toLowerCase() !== enName.toLowerCase()) continue
+			const jp = firstJpPrint(page)
+			if (jp) return jp
+		}
+		return null
 	}
 
 	const unresolved: number[] = []
@@ -606,7 +628,7 @@ if (totalCards > llCount) {
 			byProductName.set(p.name, String(n))
 		} else if (rarity) {
 			const twin = byProductName.get(p.name)
-			const from = twin != null ? secrets[twin].from ?? null : await findImport(n)
+			const from = twin != null ? secrets[twin].from ?? null : await findImport(n, p.name.replace(/\s*\[.*$/, '').trim())
 			if (from) {
 				secrets[String(n)] = { from, rarity }
 				byProductName.set(p.name, String(n))

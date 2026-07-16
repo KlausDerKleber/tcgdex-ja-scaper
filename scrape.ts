@@ -320,6 +320,7 @@ async function scrapeEnergies(cfg: SetConfig): Promise<Record<string, { name: st
 async function serebiiIllustrators(cfg: SetConfig): Promise<Record<string, string>> {
 	const out: Record<string, string> = {}
 	if (!cfg.secrets || !cfg.serebiiSlug) return out
+	const missing: string[] = []
 	for (const numStr of Object.keys(cfg.secrets)) {
 		if (cfg.secrets[numStr].energy) continue // energy cards carry no illustrator
 		const n = String(numStr).padStart(3, '0')
@@ -328,9 +329,10 @@ async function serebiiIllustrators(cfg: SetConfig): Promise<Record<string, strin
 			`${CACHE}/serebii-${n}.html`
 		)
 		const m = html.match(/Illustration:\s*<a[^>]*><u>([^<]+)<\/u>/)
-		if (!m) throw new Error(`serebii ${n}: no illustrator found`)
-		out[numStr] = m[1].trim()
+		if (m) out[numStr] = m[1].trim()
+		else missing.push(numStr) // serebii has the page but no artist yet — other sources fill in
 	}
+	if (missing.length) console.log(`note: serebii lists no illustrator for: ${missing.join(', ')}`)
 	return out
 }
 
