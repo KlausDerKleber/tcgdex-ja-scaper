@@ -39,6 +39,7 @@ if (tsc.exitCode !== 0) {
 
 const SECRET_SHORT: Record<string, string> = {
 	'Illustration rare': 'AR', 'Ultra Rare': 'SR', 'Special illustration rare': 'SAR', 'Hyper rare': 'UR',
+	'Character Rare': 'CHR', 'Character Super Rare': 'CSR',
 }
 const count = (xs: string[]) => {
 	const m = new Map<string, number>()
@@ -55,10 +56,12 @@ const catParts = [
 	`${categories.get('Energy') ?? 0} Energy`,
 ].filter((p) => !p.startsWith('0 '))
 
-// secret rares: from the config mapping when limitless lacks them, else from the scrape
-const secretRarities = config.secrets
-	? Object.values(config.secrets).map((s) => s.rarity)
-	: Object.values(cards).filter((c) => c.num > config.officialCardCount).map((c) => c.rarity ?? '?')
+// secret rares: the scraped ones (limitless lists them, e.g. SM11b's CHR) plus the
+// config-mapped ones beyond the limitless list
+const secretRarities = [
+	...Object.values(cards).filter((c) => c.num > config.officialCardCount).map((c) => c.rarity ?? '?'),
+	...Object.values(config.secrets ?? {}).filter((s) => !s.from).map((s) => s.rarity), // from-imports are already in cards.json
+]
 const secretParts = [...count(secretRarities)].map(([r, n]) => `${n} ${SECRET_SHORT[r] ?? r}`)
 const secretText = !secretRarities.length
 	? ` (${catParts.join(', ')})`

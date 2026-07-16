@@ -32,6 +32,8 @@ const RARITY_MAP: Record<string, string> = {
 	'Secret Rare': 'Ultra Rare',
 	'Special Art Rare': 'Special illustration rare',
 	'Ultra Rare': 'Mega Hyper Rare',
+	'Character Rare': 'Character Rare',
+	'Character Super Rare': 'Character Super Rare',
 }
 
 const setId = process.argv[2]

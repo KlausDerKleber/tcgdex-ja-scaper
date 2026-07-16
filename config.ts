@@ -210,8 +210,11 @@ const llCount = set.list.size
 const listHtml = await fetchCached(`https://limitlesstcg.com/cards/jp/${set.id}?display=list`, `${CACHE}/limitless-list.html`)
 const jpTooltip = [...listHtml.matchAll(/data-tooltip="([^"]*[぀-ヿ㐀-鿿][^"]*)"/g)].map((m) => clean(m[1]))[0]
 if (!jpTooltip) throw new Error('no Japanese set name tooltip on the limitless list page')
+// tooltip formats: 拡張パック「アビスアイ」 / 強化拡張パック ドリームリーグ / アビスアイ
 const wrapped = jpTooltip.match(/「([^」]+)」/)
-const nameJa = wrapped ? wrapped[1] : jpTooltip
+const nameJa = wrapped
+	? wrapped[1]
+	: jpTooltip.replace(/^(?:強化拡張パック|ハイクラスパック|コンセプトパック|拡張パック)\s*/, '')
 
 const MONTHS: Record<string, string> = { Jan: '01', Feb: '02', Mar: '03', Apr: '04', May: '05', Jun: '06', Jul: '07', Aug: '08', Sep: '09', Oct: '10', Nov: '11', Dec: '12' }
 const dm = set.date.match(/^(\d{1,2}) ([A-Z][a-z]{2}) (\d{2})$/)
@@ -512,6 +515,8 @@ const CM_RARITY: Record<string, string | null> = {
 	// cardmarket's top tier is the era's gold cards — M era calls those Mega Hyper Rare
 	'Secret Rare': serie === 'M' ? 'Mega Hyper Rare' : 'Secret Rare',
 	'Rainbow Rare': 'Hyper rare',
+	'Character Rare': 'Character Rare',
+	'Character Super Rare': 'Character Super Rare',
 }
 const cmRarity = (label: string | null): string | null => {
 	if (label == null) return null
