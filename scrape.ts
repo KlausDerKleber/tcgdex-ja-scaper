@@ -194,7 +194,7 @@ async function officialCardIds(): Promise<string[]> {
 	do {
 		const raw = await fetchCached(
 			`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=&pg=${config.officialProductId}&regulation_sidebar_form=all&sm_and_keyword=true&page=${page}`,
-			`${CACHE}/official-api-${page}.json`
+			`${CACHE}/official-api-${config.officialProductId}-${page}.json`
 		)
 		const d = JSON.parse(raw) as { maxPage: number, cardList: { cardID: string }[] }
 		maxPage = d.maxPage
@@ -343,29 +343,35 @@ async function serebiiIllustrators(cfg: SetConfig): Promise<Record<string, strin
 
 // ---------- gold staples: official Japanese text of their most recent print ----------
 
+/** the official Japanese text of a card's most recent print (searched by exact name) */
+async function officialTextByName(name: string): Promise<string | null> {
+	const raw = await fetchCached(
+		`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=${encodeURIComponent(name)}&regulation_sidebar_form=all&sm_and_keyword=true`,
+		`${CACHE}/staple-search-${name}.json`
+	)
+	const d = JSON.parse(raw) as { cardList: { cardID: string, cardNameViewText: string }[] }
+	const hits = d.cardList.filter((c) => clean(c.cardNameViewText) === name)
+	if (!hits.length) return null
+	const cardId = String(Math.max(...hits.map((c) => parseInt(c.cardID, 10))))
+	const page = await fetchCached(
+		`https://www.pokemon-card.com/card-search/details.php/card/${cardId}/regu/all`,
+		`${CACHE}/staple-${cardId}.html`
+	)
+	const seg = page.slice(page.indexOf('RightBox'), page.indexOf('RightBox') + 6000)
+	const ps = [...seg.matchAll(/<p>([\s\S]*?)<\/p>/g)]
+		.map((m) => clean(stripTags(m[1])))
+		.filter((p) => p.length > 20 && !RULE_REMINDERS.has(p))
+	return ps[0] ?? null
+}
+
 async function stapleTexts(cfg: SetConfig): Promise<Record<string, string>> {
 	const out: Record<string, string> = {}
 	if (!cfg.secrets) return out
 	const names = [...new Set(Object.values(cfg.secrets).filter((s) => s.staple).map((s) => s.staple!.nameJa))]
 	for (const name of names) {
-		const raw = await fetchCached(
-			`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=${encodeURIComponent(name)}&regulation_sidebar_form=all&sm_and_keyword=true`,
-			`${CACHE}/staple-search-${name}.json`
-		)
-		const d = JSON.parse(raw) as { cardList: { cardID: string, cardNameViewText: string }[] }
-		const hits = d.cardList.filter((c) => clean(c.cardNameViewText) === name)
-		if (!hits.length) throw new Error(`staple ${name}: not found in official database`)
-		const cardId = String(Math.max(...hits.map((c) => parseInt(c.cardID, 10))))
-		const page = await fetchCached(
-			`https://www.pokemon-card.com/card-search/details.php/card/${cardId}/regu/all`,
-			`${CACHE}/staple-${cardId}.html`
-		)
-		const seg = page.slice(page.indexOf('RightBox'), page.indexOf('RightBox') + 6000)
-		const ps = [...seg.matchAll(/<p>([\s\S]*?)<\/p>/g)]
-			.map((m) => clean(stripTags(m[1])))
-			.filter((p) => p.length > 20)
-		if (!ps.length) throw new Error(`staple ${name}: no effect text on card ${cardId}`)
-		out[name] = ps[0]
+		const text = await officialTextByName(name)
+		if (!text) throw new Error(`staple ${name}: no official text found`)
+		out[name] = text
 	}
 	return out
 }
@@ -429,6 +435,21 @@ for (const [ns, info] of Object.entries(config.secrets ?? {})) {
 	card.illustrator = officialIllustrators[ns] ?? ''
 	card.flavor = null
 	cards[ns] = card
+}
+
+// sets printed before regulation marks existed: limitless shows a synthetic "A", and
+// imported reprints may carry their original print's mark — neither is on the card
+if (config.regulationMarks === false) {
+	for (const c of Object.values(cards)) c.regulationMark = null
+}
+
+// trainers/energies still without text (gold reprints limitless lists bare, like
+// SM2p's こだわりハチマキ): the official text of their most recent print fills in
+for (const c of Object.values(cards)) {
+	const cc = c as RawCard & { effect?: string }
+	if (c.category === 'Pokemon' || cc.effect) continue
+	const text = await officialTextByName(c.name)
+	if (text) cc.effect = text
 }
 
 await resolveDexViaOtherPrints(cards)

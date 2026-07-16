@@ -13,7 +13,7 @@ const argv = process.argv.slice(2)
 const inputs: string[] = []
 const flags: string[] = []
 for (let i = 0; i < argv.length; i++) {
-	if (argv[i] === '--repo' || argv[i] === '--set') {
+	if (argv[i] === '--repo' || argv[i] === '--set' || argv[i] === '--pg') {
 		flags.push(argv[i], argv[i + 1])
 		i += 1
 	} else if (argv[i].startsWith('--')) {
@@ -26,8 +26,8 @@ if (!inputs.length) {
 	console.error('usage: bun run import.ts <pokepricelab-url | set name> [more sets …] [--set <limitless-id>] [--repo <cards-database>] [--force]')
 	process.exit(1)
 }
-if (inputs.length > 1 && flags.includes('--set')) {
-	console.error('--set pins one specific set — it cannot be combined with several inputs')
+if (inputs.length > 1 && (flags.includes('--set') || flags.includes('--pg'))) {
+	console.error('--set/--pg pin one specific set — they cannot be combined with several inputs')
 	process.exit(1)
 }
 const repoIdx = flags.indexOf('--repo')

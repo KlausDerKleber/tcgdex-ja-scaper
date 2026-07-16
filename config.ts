@@ -24,6 +24,8 @@ const repoIdx = args.indexOf('--repo')
 const repo = repoIdx !== -1 ? args[repoIdx + 1] : '../cards-database'
 const setIdx = args.indexOf('--set')
 const forcedSetId = setIdx !== -1 ? args[setIdx + 1] : null
+const pgIdx = args.indexOf('--pg')
+const forcedPg = pgIdx !== -1 ? parseInt(args[pgIdx + 1], 10) : null
 const force = args.includes('--force')
 if (!input) {
 	console.error('usage: bun run config.ts <pokepricelab-catalog-url | set name> [--set <limitless-id>] [--repo <cards-database>] [--force]')
@@ -231,7 +233,9 @@ const cardHtml = await fetchCached(
 const title = cardHtml.match(/<span class="card-text-name"><a[^>]*>([^<]+)<\/a><\/span>/)
 if (!title) throw new Error(`no card name on limitless page ${set.id}/${firstNum}`)
 const name001 = clean(title[1])
-const regulationMarks = /([A-Z])\s*Regulation Mark/.test(cardHtml)
+// limitless displays a synthetic "A" mark even for cards printed before regulation
+// marks existed — Japanese cards carry them only since SM9 (2018-12)
+const regulationMarks = /([A-Z])\s*Regulation Mark/.test(cardHtml) && releaseDate >= '2018-12'
 
 // the search paginates (ストライク has dozens of prints) — walk up to five pages
 const searchHits: { cardID: string, cardNameViewText: string }[] = []
@@ -246,13 +250,16 @@ for (let sp = 1; sp <= 5; sp++) {
 const search = { cardList: searchHits }
 
 // the official pages write set names with ideographic/extra spaces (TAG TEAM GX タッグ…
-// vs the tooltip's TAG TEAM GXタッグ…) — compare NFKC-normalized and space-free
+// vs the tooltip's TAG TEAM GXタッグ…) — compare NFKC-normalized and space-free.
+// The bare name can be too generic (SM1+ is called サン&ムーン, which every SM page
+// mentions) — require the bracketed product form or the full tooltip
 const squash = (s: string) => s.normalize('NFKC').replace(/\s+/g, '')
-const hasSetName = (s: string) => squash(s).includes(squash(nameJa))
+const hasSetName = (s: string) => squash(s).includes(squash(`「${nameJa}」`)) || squash(s).includes(squash(jpTooltip))
 
 let pg: number | null = null
 let officialCardCount: number | null = null
 let detailsPage: string | null = null
+let card001Id: string | null = null
 // cardNameViewText comes back HTML-encoded (フェローチェ&amp;マッシブーンGX) and spacing
 // differs between the sources (アローラ サンド vs アローラサンド) — compare squashed
 for (const hit of search.cardList.filter((c) => squash(clean(c.cardNameViewText)) === squash(name001))) {
@@ -264,12 +271,14 @@ for (const hit of search.cardList.filter((c) => squash(clean(c.cardNameViewText)
 	if (!col || parseInt(col[1], 10) !== firstNum || !hasSetName(page)) continue
 	officialCardCount = parseInt(col[2], 10)
 	detailsPage = page
+	card001Id = hit.cardID
 	break
 }
 if (officialCardCount == null || detailsPage == null) {
 	throw new Error(`no official details page for "${name001}" with number ${firstNum} and the set name`)
 }
 
+if (forcedPg != null) pg = forcedPg
 // pg id, recent sets: the card-search page inlines the product list ({ name: "pg", value, label })
 // — labels look like 拡張パック「アビスアイ」 or 強化拡張パック「ポケモンカード151（イチゴーイチ）」
 // (the trailing parenthetical is a reading hint, not part of the set name)
@@ -281,19 +290,61 @@ const pgEntries = [...searchPage.matchAll(/\{ name: "pg", value: "(\d+)"[^}]*lab
 		// deck products carry no 「…」 around the name — then the whole label must match
 		return squash((bracket ? bracket[1] : label).replace(/\([^)]*\)$/, '')) === squash(nameJa)
 	})
-if (pgEntries.length === 1) {
+if (pg != null) {
+	// forced via --pg
+} else if (pgEntries.length === 1) {
 	pg = parseInt(pgEntries[0][1], 10)
 } else if (pgEntries.length > 1) {
 	throw new Error(`several official products match 「${nameJa}」: ${pgEntries.map((m) => `${m[1]} (${m[2]})`).join('; ')}`)
 } else {
 	// older sets link their product page (…/products/xy/cp1.html) or their expansion
-	// mini-site (/ex/sm12a) from the card details page — both carry the card list link
-	const product = detailsPage.match(/href="(\/products\/[^"]+\.html)"/) ?? detailsPage.match(/href="(\/ex\/[a-z0-9-]+)\/?"/)
-	if (!product) throw new Error(`could not derive the official pg id for 「${nameJa}」 — neither in the card-search product list nor via a product/ex page link`)
-	const productHtml = await fetchCached(`https://www.pokemon-card.com${product[1]}`, `${CACHE}/official-product.html`)
-	const pgs = [...new Set([...productHtml.matchAll(/[?&](?:amp;)?pg=(\d+)/g)].map((m) => m[1]))]
-	if (pgs.length !== 1) throw new Error(`${product[1]} links ${pgs.length} different pg ids (${pgs.join(', ')})`)
-	pg = parseInt(pgs[0], 10)
+	// mini-site (/ex/sm12a) from the card details page — walk every candidate page
+	// until one carries a card list link (SM3p's product page has none, its /ex/ does)
+	const candidates = [
+		...[...detailsPage.matchAll(/href="(\/products\/[^"]+\.html)"/g)].map((m) => m[1]),
+		...[...detailsPage.matchAll(/href="(\/ex\/[a-z0-9-]+)\/?"/g)].map((m) => m[1]),
+		`/ex/${set.id.toLowerCase()}`,
+	]
+	if (!candidates.length) throw new Error(`could not derive the official pg id for 「${nameJa}」 — no product/ex page link on the card page`)
+	let pgs: string[] = []
+	for (const [i, cand] of [...new Set(candidates)].entries()) {
+		try {
+			const pageHtml = await fetchCached(`https://www.pokemon-card.com${cand}`, `${CACHE}/official-product-${i}.html`)
+			pgs = [...new Set([...pageHtml.matchAll(/[?&](?:amp;)?pg=(\d+)/g)].map((m) => m[1]))]
+			if (pgs.length) break
+		} catch { /* candidate page does not exist */ }
+	}
+	const product = [null, candidates.join(' / ')] // for the error messages below
+	if (pgs.length === 1) {
+		pg = parseInt(pgs[0], 10)
+	} else if (pgs.length > 1) {
+		// twin sets (Collection Sun/Moon, Ultra Sun/Moon …) share one product page that
+		// links both card lists — ours is the one whose listing carries our card 001;
+		// when several do (SM1+ vs its starter), the listing sized like the set wins
+		const matches: { pg: number, hitCnt: number }[] = []
+		for (const cand of pgs) {
+			let page = 1
+			let maxPage = 1
+			let found = false
+			let hitCnt = 0
+			do {
+				const d = JSON.parse(await fetchCached(
+					`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=&pg=${cand}&regulation_sidebar_form=all&sm_and_keyword=true&page=${page}`,
+					`${BOOT}/pg-check-${cand}-${page}.json`
+				)) as { maxPage: number, hitCnt: number, cardList: { cardID: string }[] }
+				maxPage = d.maxPage
+				hitCnt = d.hitCnt
+				found = d.cardList.some((c) => c.cardID === card001Id)
+				page += 1
+			} while (!found && page <= maxPage)
+			if (found) matches.push({ pg: parseInt(cand, 10), hitCnt })
+		}
+		if (!matches.length) throw new Error(`none of the pg ids ${pgs.join(', ')} on ${product[1]} lists card ${card001Id}`)
+		matches.sort((a, b) => Math.abs(a.hitCnt - llCount) - Math.abs(b.hitCnt - llCount))
+		pg = matches[0].pg
+	} else {
+		throw new Error(`${product[1]} links no pg id`)
+	}
 }
 
 // sanity: the pg listing covers at least the printed main set; secret rares and (for
@@ -301,7 +352,7 @@ if (pgEntries.length === 1) {
 // different size means the label matched the wrong product
 const api = JSON.parse(await fetchCached(
 	`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=&pg=${pg}&regulation_sidebar_form=all&sm_and_keyword=true&page=1`,
-	`${CACHE}/official-api-1.json`
+	`${CACHE}/official-api-${pg}-1.json`
 )) as { hitCnt: number, cardList: { cardID: string }[] }
 if (api.hitCnt < officialCardCount || api.hitCnt > 2 * Math.max(officialCardCount, llCount)) {
 	throw new Error(`pg=${pg} lists ${api.hitCnt} cards — implausible for ${officialCardCount} official / ${llCount} limitless cards`)
@@ -525,6 +576,8 @@ const CM_RARITY: Record<string, string | null> = {
 	'Rainbow Rare': 'Hyper rare',
 	'Character Rare': 'Character Rare',
 	'Character Super Rare': 'Character Super Rare',
+	'Shiny Rare': 'Shiny rare',
+	'Shiny Ultra Rare': 'Shiny Ultra Rare',
 }
 const cmRarity = (label: string | null): string | null => {
 	if (label == null) return null
@@ -580,7 +633,7 @@ if (totalCards > llCount) {
 			do {
 				const raw = await fetchCached(
 					`https://www.pokemon-card.com/card-search/resultAPI.php?keyword=&pg=${pg}&regulation_sidebar_form=all&sm_and_keyword=true&page=${page}`,
-					`${CACHE}/official-api-${page}.json`
+					`${CACHE}/official-api-${pg}-${page}.json`
 				)
 				const d = JSON.parse(raw) as { maxPage: number, cardList: { cardID: string }[] }
 				maxPage = d.maxPage
@@ -617,8 +670,11 @@ if (totalCards > llCount) {
 				`https://limitlesstcg.com/cards/en/${link}`,
 				`${BOOT}/ll-en-${link.replace('/', '-')}.html`
 			)
+			// limitless spells suffixes with a hyphen (Tapu Bulu-GX), cardmarket without —
+			// compare alphanumeric-only
+			const alnum = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '')
 			const title = page.match(/<span class="card-text-name"><a[^>]*>([^<]+)<\/a><\/span>/)
-			if (!title || clean(title[1]).toLowerCase() !== enName.toLowerCase()) continue
+			if (!title || alnum(clean(title[1])) !== alnum(enName)) continue
 			const jp = firstJpPrint(page)
 			if (jp) return jp
 		}
@@ -626,20 +682,26 @@ if (totalCards > llCount) {
 	}
 
 	const unresolved: number[] = []
+	const assumedRarity: number[] = []
 	const byProductName = new Map<string, string>() // resolved secrets by name (HR/UR share the SR's origin)
 	for (let n = llCount + 1; n <= totalCards; n++) {
 		const id = cardmarketIds[String(n)]
 		const p = id != null ? numbered.find((x) => x.idProduct === id) : undefined
 		if (!p) { unresolved.push(n); continue }
-		const rarity = cmRarity((await probeRow(slug, p))?.rarity ?? null)
+		// pokepricelab misses the odd product (M5's Dark Bell, the gold 61s of SM3H/SM4A);
+		// the reprint still resolves — only the rarity falls back to the era's gold tier,
+		// visibly noted for review
+		const probed = cmRarity((await probeRow(slug, p))?.rarity ?? null)
+		const rarity = probed ?? (serie === 'M' ? 'Mega Hyper Rare' : 'Secret Rare')
+		if (!probed) assumedRarity.push(n)
 		const basic = p.name.match(/^(?:Basic )?(Grass|Fire|Water|Lightning|Psychic|Fighting|Darkness|Metal|Fairy) Energy$/)
 		const bases = mainByName.get(p.name) ?? []
-		if (rarity && basic) {
+		if (basic) {
 			secrets[String(n)] = { energy: Object.keys(ENERGY_CODES).find((l) => ENERGY_CODES[l].type === basic[1])!, rarity }
-		} else if (rarity && bases.length === 1) {
+		} else if (bases.length === 1) {
 			secrets[String(n)] = { base: bases[0], rarity }
 			byProductName.set(p.name, String(n))
-		} else if (rarity) {
+		} else {
 			const twin = byProductName.get(p.name)
 			const from = twin != null ? secrets[twin].from ?? null : await findImport(n, p.name.replace(/\s*\[.*$/, '').trim())
 			if (from) {
@@ -648,11 +710,10 @@ if (totalCards > llCount) {
 			} else {
 				unresolved.push(n)
 			}
-		} else {
-			unresolved.push(n)
 		}
 	}
 	if (Object.keys(secrets).length) console.log(`secrets auto-derived: ${Object.keys(secrets).length} (${Object.values(secrets).filter((s) => s.from).length} imported from other sets)`)
+	if (assumedRarity.length) console.log(`note: rarity assumed as the era's gold tier for ${assumedRarity.join(', ')} (not listed on pokepricelab) — verify`)
 	if (unresolved.length) {
 		console.log(`WARNING: ${unresolved.length} secret cards need hand-curation in "secrets" (no unique reprint match): ${unresolved.join(', ')}`)
 	}
