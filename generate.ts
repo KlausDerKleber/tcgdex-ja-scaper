@@ -22,6 +22,7 @@ if (!setId || repoIdx === -1) {
 	process.exit(1)
 }
 const repo = args[repoIdx + 1]
+const mergeMode = args.includes('--merge')
 
 const config = loadConfig(setId)
 const serie = config.serie ?? 'M'
@@ -133,8 +134,16 @@ const STAGE: Record<string, string> = { 'Basic': 'Basic', 'Stage 1': 'Stage1', '
 
 const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
 
-function langBlock(value: string, indent = '\t'): string {
-	return `{\n${indent}\tja: "${esc(value)}",\n${indent}}`
+// non-ja languages of a language block in an existing (hand-curated) card file —
+// carried over verbatim in --merge mode
+type Langs = [string, string][]
+const langsOf = (block: unknown): Langs =>
+	block && typeof block === 'object' ? Object.entries(block as Record<string, string>).filter(([k, v]) => k !== 'ja' && typeof v === 'string') : []
+const langKey = (k: string) => (/^[a-z]+$/.test(k) ? k : `'${k}'`)
+
+function langBlock(value: string, indent = '\t', extra: Langs = []): string {
+	const lines = [`${indent}\tja: "${esc(value)}",`, ...extra.map(([k, v]) => `${indent}\t${langKey(k)}: "${esc(v)}",`)]
+	return `{\n${lines.join('\n')}\n${indent}}`
 }
 
 // ---------- ball foils of the reverse prints, from the English set (config.enSet) ----------
@@ -188,19 +197,22 @@ function pushVariants(L: string[], c: RawCard, variant: string): void {
 	L.push('\tvariants: [')
 	if (cm != null) entry(variant, null, cm)
 	if (rev) {
-		// two mirror prints per card: energy pattern first, ball pattern second
-		entry('reverse', 'energy', rev.ids[0])
-		entry('reverse', ballFoil(c, rev.name), rev.ids[1])
+		// two mirror prints per card: energy pattern first, ball pattern second —
+		// unless the set's pair differs (SV2a: Poké Ball then Master Ball)
+		const foils = config.reverseFoils ?? ['energy', undefined]
+		entry('reverse', foils[0] ?? null, rev.ids[0])
+		entry('reverse', foils[1] !== undefined ? foils[1] : ballFoil(c, rev.name), rev.ids[1])
 	}
 	L.push('\t],')
 }
 
-function pushAttacks(L: string[], c: RawCard): void {
+function pushAttacks(L: string[], c: RawCard, oldAttacks: { name?: unknown, effect?: unknown }[] = []): void {
 	if (!c.attacks.length) return
 	L.push('\tattacks: [')
-	for (const at of c.attacks) {
+	for (const [i, at] of c.attacks.entries()) {
+		const nameLangs = langsOf(oldAttacks[i]?.name)
 		L.push('\t\t{')
-		L.push(`\t\t\tname: { ja: "${esc(at.name)}" },`)
+		L.push(nameLangs.length ? `\t\t\tname: ${langBlock(at.name, '\t\t\t', nameLangs)},` : `\t\t\tname: { ja: "${esc(at.name)}" },`)
 		if (at.damage !== null) {
 			L.push(/^\d+$/.test(at.damage) ? `\t\t\tdamage: ${at.damage},` : `\t\t\tdamage: "${at.damage}",`)
 		}
@@ -208,6 +220,7 @@ function pushAttacks(L: string[], c: RawCard): void {
 		if (at.effect) {
 			L.push('\t\t\teffect: {')
 			L.push(`\t\t\t\tja: "${esc(at.effect)}",`)
+			for (const [k, v] of langsOf(oldAttacks[i]?.effect)) L.push(`\t\t\t\t${langKey(k)}: "${esc(v)}",`)
 			L.push('\t\t\t},')
 		}
 		L.push('\t\t},')
@@ -216,14 +229,27 @@ function pushAttacks(L: string[], c: RawCard): void {
 	L.push('')
 }
 
-function genCard(c: RawCard): string {
+/** dex ids, falling back to what the existing (merged) card file already knew */
+function resolveDexOr(c: RawCard, old?: Record<string, unknown> | null): number[] {
+	try {
+		return resolveDex(c)
+	} catch (e) {
+		const prev = old?.dexId
+		if (Array.isArray(prev) && prev.length) return prev as number[]
+		throw e
+	}
+}
+
+function genCard(c: RawCard, old?: Record<string, unknown> | null): string {
+	const oldAttacks = (old?.attacks ?? []) as { name?: unknown, effect?: unknown }[]
+	const oldAbilities = (old?.abilities ?? []) as { name?: unknown, effect?: unknown }[]
 	const L: string[] = []
 	L.push('import { Card } from "../../../interfaces";')
 	L.push(`import Set from "../${config.setId}";`)
 	L.push('')
 	L.push('const card: Card = {')
 	L.push('\tset: Set,')
-	L.push(`\tname: ${langBlock(c.name)},`)
+	L.push(`\tname: ${langBlock(c.name, '\t', langsOf(old?.name))},`)
 	L.push('')
 	L.push(`\tillustrator: "${esc(c.illustrator || '')}",`)
 	L.push(`\tcategory: "${c.category}",`)
@@ -236,38 +262,40 @@ function genCard(c: RawCard): string {
 		L.push(`\ttypes: [${c.types.map((t) => `"${t}"`).join(', ')}],`)
 		L.push('')
 		if (c.flavor) {
-			L.push(`\tdescription: ${langBlock(c.flavor)},`)
+			L.push(`\tdescription: ${langBlock(c.flavor, '\t', langsOf(old?.description))},`)
 			L.push('')
 		}
 		L.push(`\tstage: "${STAGE[c.stageRaw!]}",`)
 		L.push('')
 		if (c.abilities.length > 1) throw new Error(`card ${c.num} has multiple abilities — extend the generator`)
-		for (const ab of c.abilities) {
+		for (const [ai, ab] of c.abilities.entries()) {
+			const nameLangs = langsOf(oldAbilities[ai]?.name)
 			L.push('\tabilities: [')
 			L.push('\t\t{')
 			L.push('\t\t\ttype: "Ability",')
-			L.push(`\t\t\tname: { ja: "${esc(ab.name)}" },`)
+			L.push(nameLangs.length ? `\t\t\tname: ${langBlock(ab.name, '\t\t\t', nameLangs)},` : `\t\t\tname: { ja: "${esc(ab.name)}" },`)
 			L.push('\t\t\teffect: {')
 			L.push(`\t\t\t\tja: "${esc(ab.effect)}",`)
+			for (const [k, v] of langsOf(oldAbilities[ai]?.effect)) L.push(`\t\t\t\t${langKey(k)}: "${esc(v)}",`)
 			L.push('\t\t\t},')
 			L.push('\t\t},')
 			L.push('\t],')
 			L.push('')
 		}
-		pushAttacks(L, c)
+		pushAttacks(L, c, oldAttacks)
 		L.push(c.weakness ? `\tweaknesses: [{ type: "${c.weakness}", value: "x2" }],` : '\tweaknesses: [],')
 		L.push(c.resistance ? `\tresistances: [{ type: "${c.resistance.type}", value: "${c.resistance.value}" }],` : '\tresistances: [],')
 		L.push('')
 		pushVariants(L, c, variant)
 		L.push('')
 		if (c.evolveFrom) {
-			L.push(`\tevolveFrom: ${langBlock(c.evolveFrom)},`)
+			L.push(`\tevolveFrom: ${langBlock(c.evolveFrom, '\t', langsOf(old?.evolveFrom))},`)
 			L.push('')
 		}
 		L.push(`\tretreat: ${c.retreat},`)
 		if (c.regulationMark) L.push(`\tregulationMark: "${c.regulationMark}",`)
 		L.push(`\trarity: "${c.rarity ?? 'None'}",`) // rarity-less products use "None" (cf. data-asia/VS/VS1)
-		L.push(`\tdexId: [${resolveDex(c).join(', ')}],`)
+		L.push(`\tdexId: [${resolveDexOr(c, old).join(', ')}],`)
 		if (c.name.endsWith('ex') || c.name.endsWith('EX')) {
 			L.push('')
 			L.push('\tsuffix: "EX",')
@@ -281,10 +309,11 @@ function genCard(c: RawCard): string {
 		if (c.effect || c.energyType !== 'Basic Energy') { // basic energies carry no text
 			L.push('\teffect: {')
 			L.push(`\t\tja: "${esc(c.effect ?? '')}",`)
+			for (const [k, v] of langsOf(old?.effect)) L.push(`\t\t${langKey(k)}: "${esc(v)}",`)
 			L.push('\t},')
 			L.push('')
 		}
-		pushAttacks(L, c) // an attack granted by a Pokémon Tool (e.g. CP1 025/026)
+		pushAttacks(L, c, oldAttacks) // an attack granted by a Pokémon Tool (e.g. CP1 025/026)
 		pushVariants(L, c, variant)
 		L.push('')
 		if (c.category === 'Trainer') L.push(`\ttrainerType: "${c.trainerType}",`)
@@ -311,13 +340,25 @@ if (config.promo !== true && nums.length !== config.totalCards) {
 // collect per-card failures and report them all at once (766-card deck sets would
 // otherwise die one manualDex entry at a time)
 const failures: string[] = []
+let merged = 0
 for (const n of nums) {
+	const file = join(dir, `${String(n).padStart(3, '0')}.ts`)
 	try {
-		writeFileSync(join(dir, `${String(n).padStart(3, '0')}.ts`), genCard(cards[String(n)]))
+		// --merge: keep what the existing hand-curated file knows and we cannot derive
+		// (other languages, dex ids we fail to resolve) — everything else regenerates
+		let old: Record<string, unknown> | null = null
+		if (mergeMode && existsSync(file)) {
+			try {
+				old = (await import(file)).default as Record<string, unknown>
+				merged += 1
+			} catch { /* unparseable file — plain regenerate */ }
+		}
+		writeFileSync(file, genCard(cards[String(n)], old))
 	} catch (e) {
 		failures.push((e as Error).message)
 	}
 }
+if (merged) console.log(`merged the existing languages of ${merged} card files`)
 if (failures.length) {
 	console.error(`${failures.length} cards failed:`)
 	for (const f of failures) console.error(' -', f)

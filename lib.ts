@@ -103,6 +103,9 @@ export interface SetConfig {
 	/** English print of the set under data/ (e.g. "Mega Evolution/Ascended Heroes") —
 	 * source of the per-card ball foil of the reverse prints */
 	enSet?: string
+	/** foils of the two mirror prints in id order, when they differ from the default
+	 * [energy, per-card ball] — e.g. ["pokeball", "masterball"] for SV2a */
+	reverseFoils?: [string | null, string | null]
 	/** secret rares not listed by the machine-readable sources; number → origin */
 	secrets?: Record<string, SecretEntry>
 }
