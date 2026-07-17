@@ -86,15 +86,59 @@ if (config.regulationMarks === false) notes.push(`No \`regulationMark\` (the set
 if (config.rarities === false) notes.push(`The product's cards carry no rarity — they use \`rarity: "None"\` and plain variants, like data-asia/VS/VS1`)
 if (toolAttacks.length) notes.push(`${toolAttacks.map((c) => pad(c.num)).join('/')} ${toolAttacks.length === 1 ? 'is a Pokémon Tool' : 'are Pokémon Tools'} that grant an attack — modeled as \`effect\` + \`attacks\`, like their English prints`)
 const reverseCount = Object.keys(config.reverses ?? {}).length
-if (reverseCount) notes.push(`${reverseCount} regular cards additionally exist as two mirror prints, modeled as \`reverse\` variants with their own cardmarket ids — \`foil: "energy"\` plus a ball foil per card${config.enSet ? ` (taken from the English print, \`data/${config.enSet}\`)` : ''}`)
+const foilText = config.reverseFoils
+	? config.reverseFoils.map((f) => (f ? `\`foil: "${f}"\`` : 'no foil')).join(' + ')
+	: `\`foil: "energy"\` plus a ball foil per card${config.enSet ? ` (taken from the English print, \`data/${config.enSet}\`)` : ''}`
+if (reverseCount) notes.push(`${reverseCount} regular cards additionally exist as two mirror prints, modeled as \`reverse\` variants with their own cardmarket ids — ${foilText}`)
 notes.push(`All ${files.length} files type-check against \`interfaces.d.ts\` (\`tsc --noEmit\`)`)
+
+// an update refreshes a set that already exists on the branch the pull request will
+// diff against (the upstream default branch) — that is also the comparison point for
+// the concrete correction counts
+const base = existsSync(join(repo, '.git')) && Bun.spawnSync(['git', 'rev-parse', '--verify', '--quiet', 'upstream/master'], { cwd: repo }).exitCode === 0
+	? 'upstream/master'
+	: 'HEAD'
+const tracked = existsSync(join(repo, '.git'))
+	&& Bun.spawnSync(['git', 'cat-file', '-e', `${base}:data-asia/${serie}/${setId}/${pad(1)}.ts`], { cwd: repo }).exitCode === 0
+let whatBlock: string
+let title: string
+if (tracked) {
+	const oldLangs = new Set<string>()
+	let fixedIds = 0
+	let addedIds = 0
+	for (const f of files) {
+		const show = Bun.spawnSync(['git', 'show', `${base}:data-asia/${serie}/${setId}/${f}`], { cwd: repo })
+		if (show.exitCode !== 0) continue
+		const oldSrc = show.stdout.toString()
+		for (const m of oldSrc.matchAll(/^\s*'?([a-z][a-z-]*)'?: "/gm)) {
+			if (m[1] !== 'ja') oldLangs.add(m[1])
+		}
+		const oldCm = oldSrc.match(/cardmarket:\s*(\d+)/)
+		const newCm = config.cardmarketIds[String(parseInt(f, 10))]
+		if (newCm != null && oldCm == null) addedIds += 1
+		else if (newCm != null && oldCm != null && parseInt(oldCm[1], 10) !== newCm) fixedIds += 1
+	}
+	const LANGS = ['en', 'fr', 'de', 'es', 'it', 'pt', 'ko', 'zh-tw', 'zh-cn', 'th', 'id', 'nl', 'pl', 'ru']
+	const langList = LANGS.filter((l) => oldLangs.has(l))
+	title = `(data) Update Japanese ${serie} set ${setId}${config.nameEn ? ` ${config.nameEn}` : ''}`
+	whatBlock = `Refreshes the existing Japanese set **${setId} ${config.nameJa}${en}** from its primary sources. The curated content stays: every card keeps its ${langList.map((l) => `\`${l}\``).join('/')} texts verbatim.
+
+What changes across the ${files.length} card files:
+
+- \`thirdParty.cardmarket\` moves onto \`variants\` objects${fixedIds ? `, **${fixedIds} wrong ids are corrected** (secret-rare reprints had resolved to their base cards)` : ''}${addedIds ? ` and ${addedIds} missing ids are filled in` : ''}
+- per card where missing: \`dexId\`, \`evolveFrom\`, \`resistances\`, the Japanese flavor text and the Japanese effect/attack texts straight from the official database and limitless${reverseCount ? `\n- ${reverseCount} regular cards gain their two mirror prints as \`reverse\` variants (${foilText}) with their own cardmarket ids` : ''}`
+} else {
+	title = `(data) Add Japanese ${serie} set ${setId}${config.nameEn ? ` ${config.nameEn}` : ''}`
+	whatBlock = `Adds the complete Japanese set **${setId} ${config.nameJa}${en}**, released ${config.releaseDate}:
+
+${setFileGenerated ? `- \`data-asia/${serie}/${setId}.ts\` — set definition (${config.officialCardCount} official cards)\n` : ''}- \`data-asia/${serie}/${setId}/${pad(1)}.ts\` … \`${pad(config.totalCards)}.ts\` — ${config.promo === true ? `the ${Object.keys(cards).length} promos published so far (numbering has gaps)` : `all ${config.totalCards} cards${secretText}`}
+${energyCount ? `- ${Object.keys(config.energies!).map((l) => `\`${ENERGY_CODES[l].code}.ts\``).join(', ')} — the deck's ${energyCount} basic energies (letter-coded, like data-asia/S/SI)\n` : ''}${setFileGenerated ? '' : `- the set definition \`data-asia/${serie}/${setId}.ts\` already existed and is untouched\n`}`.trimEnd()
+}
 
 const body = `## What
 
-Adds the complete Japanese set **${setId} ${config.nameJa}${en}**, released ${config.releaseDate}:
+${whatBlock}
 
-${setFileGenerated ? `- \`data-asia/${serie}/${setId}.ts\` — set definition (${config.officialCardCount} official cards)\n` : ''}- \`data-asia/${serie}/${setId}/${pad(1)}.ts\` … \`${pad(config.totalCards)}.ts\` — ${config.promo === true ? `the ${Object.keys(cards).length} promos published so far (numbering has gaps)` : `all ${config.totalCards} cards${secretText}`}
-${energyCount ? `- ${Object.keys(config.energies!).map((l) => `\`${ENERGY_CODES[l].code}.ts\``).join(', ')} — the deck's ${energyCount} basic energies (letter-coded, like data-asia/S/SI)\n` : ''}${setFileGenerated ? '' : `- the set definition \`data-asia/${serie}/${setId}.ts\` already existed and is untouched\n`}
 ## Data sources
 
 - **pokemon-card.com** (official database): Japanese names, flavor texts, National Dex numbers, official card count
@@ -105,8 +149,6 @@ ${energyCount ? `- ${Object.keys(config.energies!).map((l) => `\`${ENERGY_CODES[
 
 ${notes.map((n) => `- ${n}`).join('\n')}
 `
-
-const title = `(data) Add Japanese ${serie} set ${setId}${config.nameEn ? ` ${config.nameEn}` : ''}`
 writeFileSync(`${import.meta.dir}/out/${setId}/pr.md`, `${title}\n\n${body}`)
 console.log(`out/${setId}/pr.md:\n`)
 console.log(`${title}\n\n${body}`)
